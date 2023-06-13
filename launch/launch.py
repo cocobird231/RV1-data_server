@@ -13,7 +13,7 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package="cpp_dataserver",
-            namespace=data['node_prop']['namespace'],
+            namespace=data['generic_prop']['namespace'],
             executable="sub",
             output="screen",
             emulate_tty=True,
@@ -29,7 +29,11 @@ def generate_launch_description():
                     "recordTime_s" : data['RecordSetting']['recordTime_s'], 
                     "numOfImgSaveTh" : data['RecordSetting']['numOfImgSaveTh'], 
                     "numOfGndSaveTh" : data['RecordSetting']['numOfGndSaveTh'], 
-                    "mainNodeName" : data['node_prop']['nodeName'], 
+                    "enabled_recording" : data['RecordSetting']['enabled_recording'], 
+                    "nodeName" : data['generic_prop']['nodeName'], 
+                    "qosService" : data['generic_prop']['qosService'], 
+                    "safetyService" : data['generic_prop']['safetyService'], 
+                    "timesyncService" : data['generic_prop']['timesyncService'], 
                 }
             ]
         )

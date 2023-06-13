@@ -14,8 +14,11 @@ RecordSetting:
     recordTime_s : -1.0 # Total record time, non-stop if value < 0
     numOfImgSaveTh : 4 # Number of image saving threads
     numOfGndSaveTh : 1 # Number of image saving threads
+    enabled_recording : False
 
-node_prop:
+generic_prop:
     nodeName : "dataserver_0_node"
     namespace : "V0"
-    
+    qosService : "qos_0"
+    safetyService : "safety_0"
+    timesyncService : "timesync_0"

@@ -808,7 +808,7 @@ private:
 
 		st.header = header;
 		st.bboxVec = bboxStructVec;
-		st.groundLine = {msg->ground_line.begin(), msg->ground_line.end()};// To be improved
+		st.groundLine = {msg->ground_line.begin(), msg->ground_line.end()};// TODO: To be improved
 
 		this->saveQue_->push(this->outputDir_ + filename, st);
 		locker.unlock();

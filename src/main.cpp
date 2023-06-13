@@ -1,10 +1,40 @@
 #include "header.h"
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 
 class Params : public rclcpp::Node
 {
 public:
+    std::string nodeName = "dataserver_0_node";
+    std::string qosService = "qos_0";
+    std::string safetyService = "safety_0";
+    std::string timesyncService = "timesync_0";
+
+private:
+    void _getParams()
+    {
+        this->get_parameter("nodeName", this->nodeName);
+        this->get_parameter("qosService", this->qosService);
+        this->get_parameter("safetyService", this->safetyService);
+        this->get_parameter("timesyncService", this->timesyncService);
+    }
+
+public:
+    Params(std::string nodeName) : Node(nodeName)
+    {
+        this->declare_parameter<std::string>("nodeName", this->nodeName);
+        this->declare_parameter<std::string>("qosService", this->qosService);
+        this->declare_parameter<std::string>("safetyService", this->safetyService);
+        this->declare_parameter<std::string>("timesyncService", this->timesyncService);
+        this->_getParams();
+    }
+};
+
+class ScanTopicNode : public rclcpp::Node
+{
+private:
+    // ScanTopicNode parameters
     float topicScanTime_ms = 1000.0;
-    std::string subscribeMsgPack = "subscribeMsgPack";
+    std::string subscribeMsgPack = "vehicle_interfaces";
     std::vector<std::string> zedRGBTopicNameList;
     std::vector<std::string> zedDepthTopicNameList;
 
@@ -14,49 +44,12 @@ public:
     float recordTime_s = -1.0;
     int numOfImgSaveTh = 4;
     int numOfGndSaveTh = 1;
+    bool enabled_recording = false;
+    rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr paramsCallbackHandler;
+    std::mutex externalControlLock_;
 
-    std::string mainNodeName = "Dataserver_node";
-
-private:
-    void _getParams()
-    {
-        this->get_parameter("topicScanTime_ms", this->topicScanTime_ms);
-        this->get_parameter("subscribeMsgPack", this->subscribeMsgPack);
-        this->get_parameter("zedRGBTopicNameList", this->zedRGBTopicNameList);
-        this->get_parameter("zedDepthTopicNameList", this->zedDepthTopicNameList);
-        this->get_parameter("outputFilename", this->outputFilename);
-        this->get_parameter("samplingStep_ms", this->samplingStep_ms);
-        this->get_parameter("autoSaveTime_s", this->autoSaveTime_s);
-        this->get_parameter("recordTime_s", this->recordTime_s);
-        this->get_parameter("numOfImgSaveTh", this->numOfImgSaveTh);
-        this->get_parameter("numOfGndSaveTh", this->numOfGndSaveTh);
-        this->get_parameter("mainNodeName", this->mainNodeName);
-    }
-
-public:
-    Params(std::string nodeName) : Node(nodeName)
-    {
-        this->declare_parameter<float>("topicScanTime_ms", this->topicScanTime_ms);
-        this->declare_parameter<std::string>("subscribeMsgPack", this->subscribeMsgPack);
-        this->declare_parameter<std::vector<std::string> >("zedRGBTopicNameList", this->zedRGBTopicNameList);
-        this->declare_parameter<std::vector<std::string> >("zedDepthTopicNameList", this->zedDepthTopicNameList);
-        this->declare_parameter<std::string>("outputFilename", this->outputFilename);
-        this->declare_parameter<float>("samplingStep_ms", this->samplingStep_ms);
-        this->declare_parameter<float>("autoSaveTime_s", this->autoSaveTime_s);
-        this->declare_parameter<float>("recordTime_s", this->recordTime_s);
-        this->declare_parameter<int>("numOfImgSaveTh", this->numOfImgSaveTh);
-        this->declare_parameter<int>("numOfGndSaveTh", this->numOfGndSaveTh);
-        this->declare_parameter<std::string>("mainNodeName", this->mainNodeName);
-        this->_getParams();
-    }
-};
-
-class ScanTopicNode : public rclcpp::Node
-{
-private:
-    // ScanTopicNode parameters
-    std::shared_ptr<Params> params_;// Get ScanTopicNode parameters
-    bool exitF_;// Stop ScanTopicNode
+    // Stop ScanTopicNode
+    bool exitF_;
 
     // Grab nodes and topics relation table form NodeTopicTable.json
     // {"node_name" : {"topic_name" : "msg_type", ...}, ...}
@@ -101,6 +94,50 @@ private:
     
     
 private:
+    void _getParams()
+    {
+        this->get_parameter("topicScanTime_ms", this->topicScanTime_ms);
+        this->get_parameter("subscribeMsgPack", this->subscribeMsgPack);
+        this->get_parameter("zedRGBTopicNameList", this->zedRGBTopicNameList);
+        this->get_parameter("zedDepthTopicNameList", this->zedDepthTopicNameList);
+        this->get_parameter("outputFilename", this->outputFilename);
+        this->get_parameter("samplingStep_ms", this->samplingStep_ms);
+        this->get_parameter("autoSaveTime_s", this->autoSaveTime_s);
+        this->get_parameter("recordTime_s", this->recordTime_s);
+        this->get_parameter("numOfImgSaveTh", this->numOfImgSaveTh);
+        this->get_parameter("numOfGndSaveTh", this->numOfGndSaveTh);
+        this->get_parameter("enabled_recording", this->enabled_recording);
+    }
+
+    rcl_interfaces::msg::SetParametersResult _paramsCallback(const std::vector<rclcpp::Parameter>& params)
+    {
+        rcl_interfaces::msg::SetParametersResult res;
+        res.successful = true;
+        res.reason = "";
+
+        for (const auto& param : params)
+        {
+            try
+            {
+                if (param.get_name() == "enabled_recording")
+                {
+                    this->enabled_recording = param.as_bool();
+                    if (this->enabled_recording)
+                        this->startSampling();
+                    else
+                        this->stopSampling();
+                    return res;
+                }
+            }
+            catch (...)
+            {
+                res.successful = false;
+            }
+        }
+
+        return res;
+    }
+
     void _monitorTimerCallback()
     {
         // Search topics
@@ -133,9 +170,10 @@ private:
             if (!i.second.occupyF)
             {
                 auto msgTypeSplit = split(i.second.msgType, "/");
-                if (msgTypeSplit[0] == "vehicle_interfaces" && msgTypeSplit[1] == "msg")
+                if (msgTypeSplit[0] == this->subscribeMsgPack && msgTypeSplit[1] == "msg")
                 {
-                    std::string subNodeName = i.first.substr(1) + "_subnode";
+                    auto splitTopicName = split(i.first, "/");
+                    std::string subNodeName = splitTopicName.back() + "_subnode";
                     replace_all(subNodeName, "/", "_");
 
                     if (msgTypeSplit[2] == "Distance")
@@ -145,11 +183,11 @@ private:
                     else if (msgTypeSplit[2] == "GPS")
                         i.second.node = std::make_shared<GPSSubNode>(subNodeName, i.first);
                     else if (msgTypeSplit[2] == "GroundDetect")
-                        i.second.node = std::make_shared<GroundDetectSubNode>(subNodeName, i.first, this->params_->outputFilename, this->globalGndQue_);
+                        i.second.node = std::make_shared<GroundDetectSubNode>(subNodeName, i.first, this->outputFilename, this->globalGndQue_);
                     else if (msgTypeSplit[2] == "IDTable")
                         i.second.node = std::make_shared<IDTableSubNode>(subNodeName, i.first);
                     else if (msgTypeSplit[2] == "Image")
-                        i.second.node = std::make_shared<ImageSubNode>(subNodeName, i.first, this->params_->outputFilename, this->globalImgQue_);
+                        i.second.node = std::make_shared<ImageSubNode>(subNodeName, i.first, this->outputFilename, this->globalImgQue_);
                     else if (msgTypeSplit[2] == "IMU")
                         i.second.node = std::make_shared<IMUSubNode>(subNodeName, i.first);
                     else if (msgTypeSplit[2] == "MillitBrakeMotor")
@@ -177,17 +215,17 @@ private:
                 // ZED preserved topic name
                 else if (msgTypeSplit[0] == "sensor_msgs" && msgTypeSplit[2] == "Image")
                 {
-                    if (ElementInVector(i.first, this->params_->zedRGBTopicNameList))
+                    if (ElementInVector(i.first, this->zedRGBTopicNameList))
                     {
                         std::string subNodeName = i.first.substr(1) + "_node";
                         replace_all(subNodeName, "/", "_");
-                        i.second.node = std::make_shared<RGBMatSubNode>(subNodeName, params_->outputFilename, this->globalImgQue_, i.first);
+                        i.second.node = std::make_shared<RGBMatSubNode>(subNodeName, outputFilename, this->globalImgQue_, i.first);
                     }
-                    else if (ElementInVector(i.first, this->params_->zedDepthTopicNameList))
+                    else if (ElementInVector(i.first, this->zedDepthTopicNameList))
                     {
                         std::string subNodeName = i.first.substr(1) + "_node";
                         replace_all(subNodeName, "/", "_");
-                        i.second.node = std::make_shared<DepthMatSubNode>(subNodeName, params_->outputFilename, this->globalImgQue_, i.first);
+                        i.second.node = std::make_shared<DepthMatSubNode>(subNodeName, outputFilename, this->globalImgQue_, i.first);
                     }
                     else
                         continue;
@@ -321,27 +359,40 @@ private:
     }
 
 public:
-    ScanTopicNode(std::shared_ptr<Params> params) : rclcpp::Node(params->mainNodeName), stopMonitorF_(false), exitF_(false), nodeDetectF_(false), outPackBkF_(false)
+    ScanTopicNode(const std::string& nodeName) : rclcpp::Node(nodeName), stopMonitorF_(false), exitF_(false), nodeDetectF_(false), outPackBkF_(false)
     {
-        this->params_ = params;
+        this->declare_parameter<float>("topicScanTime_ms", this->topicScanTime_ms);
+        this->declare_parameter<std::string>("subscribeMsgPack", this->subscribeMsgPack);
+        this->declare_parameter<std::vector<std::string> >("zedRGBTopicNameList", this->zedRGBTopicNameList);
+        this->declare_parameter<std::vector<std::string> >("zedDepthTopicNameList", this->zedDepthTopicNameList);
+        this->declare_parameter<std::string>("outputFilename", this->outputFilename);
+        this->declare_parameter<float>("samplingStep_ms", this->samplingStep_ms);
+        this->declare_parameter<float>("autoSaveTime_s", this->autoSaveTime_s);
+        this->declare_parameter<float>("recordTime_s", this->recordTime_s);
+        this->declare_parameter<int>("numOfImgSaveTh", this->numOfImgSaveTh);
+        this->declare_parameter<int>("numOfGndSaveTh", this->numOfGndSaveTh);
+        this->declare_parameter<bool>("enabled_recording", this->enabled_recording);
+        this->_getParams();
+        this->paramsCallbackHandler = this->add_on_set_parameters_callback(std::bind(&ScanTopicNode::_paramsCallback, this, std::placeholders::_1));
+        
         char buf[128];
-        if (this->params_->outputFilename.back() != '/')
-            this->params_->outputFilename += '/';
-        sprintf(buf, "rm -rf %s && mkdir -p %sjson", this->params_->outputFilename.c_str(), this->params_->outputFilename.c_str());
+        if (this->outputFilename.back() != '/')
+            this->outputFilename += '/';
+        sprintf(buf, "rm -rf %s && mkdir -p %sjson", this->outputFilename.c_str(), this->outputFilename.c_str());
         const int dir_err = system(buf);
 
         // Node and topic relation table
         this->nodeDetectF_ = this->nodeTopicMsgTable_.loadTable("NodeTopicTable.json");
 
-        this->globalImgQue_ = new SaveImgQueue(this->params_->numOfImgSaveTh, 100);
-        this->globalGndQue_ = new SaveQueue<WriteGroundDetectStruct>(this->params_->numOfImgSaveTh, 100);
+        this->globalImgQue_ = new SaveImgQueue(this->numOfImgSaveTh, 100);
+        this->globalGndQue_ = new SaveQueue<WriteGroundDetectStruct>(this->numOfGndSaveTh, 100);
 
-        this->monitorTimer_ = new Timer(params->topicScanTime_ms, std::bind(&ScanTopicNode::_monitorTimerCallback, this));
+        this->monitorTimer_ = new Timer(this->topicScanTime_ms, std::bind(&ScanTopicNode::_monitorTimerCallback, this));
         this->monitorTimer_->start();
-        this->sampleTimer_ = new Timer(params->samplingStep_ms, std::bind(&ScanTopicNode::_sampleTimerCallback, this));
-        this->dumpTimer_ = new Timer(params->autoSaveTime_s * 1000, std::bind(&ScanTopicNode::_dumpTimerCallback, this));
-        if (params->recordTime_s > 0)
-            this->recordTimer_ = new Timer(params->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
+        this->sampleTimer_ = new Timer(this->samplingStep_ms, std::bind(&ScanTopicNode::_sampleTimerCallback, this));
+        this->dumpTimer_ = new Timer(this->autoSaveTime_s * 1000, std::bind(&ScanTopicNode::_dumpTimerCallback, this));
+        if (this->recordTime_s > 0)
+            this->recordTimer_ = new Timer(this->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
         else
             this->recordTimer_ = nullptr;
         this->packPtr_ = &this->pack_;
@@ -349,6 +400,8 @@ public:
 
     void startSampling()
     {
+        std::lock_guard<std::mutex>(this->externalControlLock_);
+        std::cerr << "[ScanTopicNode][startSampling]" << "\n";
         this->outFileTimestamp_ = this->get_clock()->now().seconds();
         this->sampleTimer_->start();
         this->dumpTimer_->start();
@@ -358,26 +411,44 @@ public:
 
     void stopSampling()
     {
+        std::lock_guard<std::mutex>(this->externalControlLock_);
+        std::cerr << "[ScanTopicNode][stopSampling]" << "\n";
         this->sampleTimer_->stop();
         this->dumpTimer_->stop();
         if (this->recordTimer_ != nullptr)
             this->recordTimer_->stop();
+        this->dumpJSON();// Rest of files in mem
     }
 
     void dumpJSON()
     {
+        size_t packSz = 0;// Current pack size
+
         std::unique_lock<std::mutex> locker(this->outPackPtrLock_, std::defer_lock);
         locker.lock();
+        // Change this->packPtr_ to switch sampling storage buffer
         if (!this->outPackBkF_)
+        {
             this->packPtr_ = &this->packBk_;
+            packSz = this->pack_.size();
+        }
         else
+        {
             this->packPtr_ = &this->pack_;
+            packSz = this->packBk_.size();
+        }
         locker.unlock();
+
+        if (packSz <= 0)
+        {
+            this->outPackBkF_ = !this->outPackBkF_;
+            return;
+        }
 
         double fileTimestamp = this->outFileTimestamp_;
         this->outFileTimestamp_ = this->get_clock()->now().seconds();
         auto st = std::chrono::steady_clock::now();
-        std::ofstream outFile(this->params_->outputFilename + "json/" + std::to_string(fileTimestamp) + ".json");
+        std::ofstream outFile(this->outputFilename + "json/" + std::to_string(fileTimestamp) + ".json");
         printf("Dump json from %s buffer...\n", this->outPackBkF_ ? "packBk_" : "pack_");
         if (this->outPackBkF_)
         {
@@ -433,14 +504,14 @@ public:
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    auto params = std::make_shared<Params>("dataserver_params_node");
-    auto scanTopicNode = std::make_shared<ScanTopicNode>(params);
+    auto paramNode = std::make_shared<Params>("param_node");
+    auto scanTopicNode = std::make_shared<ScanTopicNode>(paramNode->nodeName);
     rclcpp::executors::SingleThreadedExecutor* executor = new rclcpp::executors::SingleThreadedExecutor();
     executor->add_node(scanTopicNode);
     std::thread scanTopicNodeTH(SpinNodeExecutor, executor, "scanTopicNodeTH");
 
     std::this_thread::sleep_for(2s);
-    scanTopicNode->startSampling();
+    // scanTopicNode->startSampling();
 
     while (!scanTopicNode->isExit())
         std::this_thread::yield();
