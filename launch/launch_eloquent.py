@@ -29,8 +29,12 @@ def generate_launch_description():
                     "recordTime_s" : data['RecordSetting']['recordTime_s'], 
                     "numOfImgSaveTh" : data['RecordSetting']['numOfImgSaveTh'], 
                     "numOfGndSaveTh" : data['RecordSetting']['numOfGndSaveTh'], 
-                    "enabled_recording" : data['RecordSetting']['enabled_recording'], 
+                    "enabled_record" : data['RecordSetting']['enabled_record'], 
+
+                    # Settings for Params class under vehicle_interfaces/params.h
+                    # Do not change the settings rashly
                     "nodeName" : data['generic_prop']['nodeName'], 
+                    "id" : data['generic_prop']['id'], 
                     "qosService" : data['generic_prop']['qosService'], 
                     "safetyService" : data['generic_prop']['safetyService'], 
                     "timesyncService" : data['generic_prop']['timesyncService'], 

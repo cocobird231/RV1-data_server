@@ -1,33 +1,7 @@
 #include "header.h"
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include "vehicle_interfaces/params.h"
 
-class Params : public rclcpp::Node
-{
-public:
-    std::string nodeName = "dataserver_0_node";
-    std::string qosService = "qos_0";
-    std::string safetyService = "safety_0";
-    std::string timesyncService = "timesync_0";
-
-private:
-    void _getParams()
-    {
-        this->get_parameter("nodeName", this->nodeName);
-        this->get_parameter("qosService", this->qosService);
-        this->get_parameter("safetyService", this->safetyService);
-        this->get_parameter("timesyncService", this->timesyncService);
-    }
-
-public:
-    Params(std::string nodeName) : Node(nodeName)
-    {
-        this->declare_parameter<std::string>("nodeName", this->nodeName);
-        this->declare_parameter<std::string>("qosService", this->qosService);
-        this->declare_parameter<std::string>("safetyService", this->safetyService);
-        this->declare_parameter<std::string>("timesyncService", this->timesyncService);
-        this->_getParams();
-    }
-};
 
 class ScanTopicNode : public rclcpp::Node
 {
@@ -39,12 +13,12 @@ private:
     std::vector<std::string> zedDepthTopicNameList;
 
     std::string outputFilename = "datalog";
-    float samplingStep_ms = 10.0;
-    float autoSaveTime_s = 10.0;
-    float recordTime_s = -1.0;
+    double samplingStep_ms = 10.0;
+    double autoSaveTime_s = 10.0;
+    double recordTime_s = -1.0;
     int numOfImgSaveTh = 4;
     int numOfGndSaveTh = 1;
-    bool enabled_recording = false;
+    bool enabled_record = false;
     rclcpp::Node::OnSetParametersCallbackHandle::SharedPtr paramsCallbackHandler;
     std::mutex externalControlLock_;
 
@@ -106,7 +80,7 @@ private:
         this->get_parameter("recordTime_s", this->recordTime_s);
         this->get_parameter("numOfImgSaveTh", this->numOfImgSaveTh);
         this->get_parameter("numOfGndSaveTh", this->numOfGndSaveTh);
-        this->get_parameter("enabled_recording", this->enabled_recording);
+        this->get_parameter("enabled_record", this->enabled_record);
     }
 
     rcl_interfaces::msg::SetParametersResult _paramsCallback(const std::vector<rclcpp::Parameter>& params)
@@ -119,19 +93,41 @@ private:
         {
             try
             {
-                if (param.get_name() == "enabled_recording")
+                if (param.get_name() == "enabled_record")
                 {
-                    this->enabled_recording = param.as_bool();
-                    if (this->enabled_recording)
+                    this->enabled_record = param.as_bool();
+                    if (this->enabled_record)
                         this->startSampling();
                     else
                         this->stopSampling();
                     return res;
                 }
+                else if (param.get_name() == "samplingStep_ms")
+                {
+                    this->samplingStep_ms = param.as_double();
+                    this->sampleTimer_->setInterval(this->samplingStep_ms);
+                }
+                else if (param.get_name() == "autoSaveTime_s")
+                {
+                    this->autoSaveTime_s = param.as_double();
+                    this->dumpTimer_->setInterval(this->autoSaveTime_s * 1000.0);
+                }
+                else if (param.get_name() == "recordTime_s")
+                {
+                    this->recordTime_s = param.as_double();
+                    if (this->recordTimer_ == nullptr)
+                    {
+                        this->recordTimer_ = new Timer(this->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
+                    }
+                        
+                    else
+                        this->recordTimer_->setInterval(this->recordTime_s * 1000.0);
+                }
             }
             catch (...)
             {
                 res.successful = false;
+                res.reason = "[ScanTopicNode::_paramsCallback] Caught Unknown Exception!";
             }
         }
 
@@ -366,12 +362,12 @@ public:
         this->declare_parameter<std::vector<std::string> >("zedRGBTopicNameList", this->zedRGBTopicNameList);
         this->declare_parameter<std::vector<std::string> >("zedDepthTopicNameList", this->zedDepthTopicNameList);
         this->declare_parameter<std::string>("outputFilename", this->outputFilename);
-        this->declare_parameter<float>("samplingStep_ms", this->samplingStep_ms);
-        this->declare_parameter<float>("autoSaveTime_s", this->autoSaveTime_s);
-        this->declare_parameter<float>("recordTime_s", this->recordTime_s);
+        this->declare_parameter<double>("samplingStep_ms", this->samplingStep_ms);
+        this->declare_parameter<double>("autoSaveTime_s", this->autoSaveTime_s);
+        this->declare_parameter<double>("recordTime_s", this->recordTime_s);
         this->declare_parameter<int>("numOfImgSaveTh", this->numOfImgSaveTh);
         this->declare_parameter<int>("numOfGndSaveTh", this->numOfGndSaveTh);
-        this->declare_parameter<bool>("enabled_recording", this->enabled_recording);
+        this->declare_parameter<bool>("enabled_record", this->enabled_record);
         this->_getParams();
         this->paramsCallbackHandler = this->add_on_set_parameters_callback(std::bind(&ScanTopicNode::_paramsCallback, this, std::placeholders::_1));
         
@@ -504,7 +500,7 @@ public:
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    auto paramNode = std::make_shared<Params>("param_node");
+    auto paramNode = std::make_shared<vehicle_interfaces::GenericParams>("dataserver_params_node");
     auto scanTopicNode = std::make_shared<ScanTopicNode>(paramNode->nodeName);
     rclcpp::executors::SingleThreadedExecutor* executor = new rclcpp::executors::SingleThreadedExecutor();
     executor->add_node(scanTopicNode);
