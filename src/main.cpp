@@ -2,8 +2,13 @@
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include "vehicle_interfaces/params.h"
 
+#define TS_MODE
 
+#ifdef TS_MODE
+class ScanTopicNode : public TimeSyncNode
+#else
 class ScanTopicNode : public rclcpp::Node
+#endif
 {
 private:
     // ScanTopicNode parameters
@@ -200,6 +205,8 @@ private:
                         i.second.node = std::make_shared<WheelStateSubNode>(subNodeName, i.first);
                     else
                         continue;
+                    
+                    i.second.node->setOffset(this->getCorrectDuration(), this->getTimestampType());
 
                     this->execMap_[i.first] = new rclcpp::executors::SingleThreadedExecutor();
                     this->execMap_[i.first]->add_node(i.second.node);
@@ -314,8 +321,11 @@ private:
         topicContainerLocker.lock();
         TopicContainerPack topicContainerPackTmp = this->topicContainerPack_;
         topicContainerLocker.unlock();
-        
+#ifdef TS_MODE
+        double sampleTimestamp = this->getTimestamp().seconds();
+#else
         double sampleTimestamp = this->get_clock()->now().seconds();
+#endif
         locker.lock();
         for (const auto& i : topicContainerPackTmp)
         {
@@ -355,7 +365,15 @@ private:
     }
 
 public:
-    ScanTopicNode(const std::string& nodeName) : rclcpp::Node(nodeName), stopMonitorF_(false), exitF_(false), nodeDetectF_(false), outPackBkF_(false)
+    ScanTopicNode(const std::shared_ptr<vehicle_interfaces::GenericParams>& gParams) : 
+#ifdef TS_MODE
+        TimeSyncNode(gParams->nodeName, gParams->timesyncService, 3000000, 2), 
+#endif
+        rclcpp::Node(gParams->nodeName), 
+        stopMonitorF_(false), 
+        exitF_(false), 
+        nodeDetectF_(false), 
+        outPackBkF_(false)
     {
         this->declare_parameter<float>("topicScanTime_ms", this->topicScanTime_ms);
         this->declare_parameter<std::string>("subscribeMsgPack", this->subscribeMsgPack);
@@ -398,7 +416,11 @@ public:
     {
         std::lock_guard<std::mutex>(this->externalControlLock_);
         std::cerr << "[ScanTopicNode][startSampling]" << "\n";
+#ifdef TS_MODE
+        this->outFileTimestamp_ = this->getTimestamp().seconds();
+#else
         this->outFileTimestamp_ = this->get_clock()->now().seconds();
+#endif
         this->sampleTimer_->start();
         this->dumpTimer_->start();
         if (this->recordTimer_ != nullptr)
@@ -442,7 +464,11 @@ public:
         }
 
         double fileTimestamp = this->outFileTimestamp_;
+#ifdef TS_MODE
+        this->outFileTimestamp_ = this->getTimestamp().seconds();
+#else
         this->outFileTimestamp_ = this->get_clock()->now().seconds();
+#endif
         auto st = std::chrono::steady_clock::now();
         std::ofstream outFile(this->outputFilename + "json/" + std::to_string(fileTimestamp) + ".json");
         printf("Dump json from %s buffer...\n", this->outPackBkF_ ? "packBk_" : "pack_");
@@ -500,8 +526,8 @@ public:
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    auto paramNode = std::make_shared<vehicle_interfaces::GenericParams>("dataserver_params_node");
-    auto scanTopicNode = std::make_shared<ScanTopicNode>(paramNode->nodeName);
+    auto gParams = std::make_shared<vehicle_interfaces::GenericParams>("dataserver_params_node");
+    auto scanTopicNode = std::make_shared<ScanTopicNode>(gParams);
     rclcpp::executors::SingleThreadedExecutor* executor = new rclcpp::executors::SingleThreadedExecutor();
     executor->add_node(scanTopicNode);
     std::thread scanTopicNodeTH(SpinNodeExecutor, executor, "scanTopicNodeTH");
