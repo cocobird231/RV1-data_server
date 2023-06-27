@@ -367,7 +367,7 @@ private:
 public:
     ScanTopicNode(const std::shared_ptr<vehicle_interfaces::GenericParams>& gParams) : 
 #ifdef TS_MODE
-        TimeSyncNode(gParams->nodeName, gParams->timesyncService, 3000000, 2), 
+        TimeSyncNode(gParams->nodeName, gParams->timesyncService, gParams->timesyncInterval_ms, gParams->timesyncAccuracy_ms), 
 #endif
         rclcpp::Node(gParams->nodeName), 
         stopMonitorF_(false), 
