@@ -206,7 +206,7 @@ private:
                     else
                         continue;
                     
-                    i.second.node->setOffset(this->getCorrectDuration(), this->getTimestampType());
+                    i.second.node->syncTime(this->getCorrectDuration(), this->getTimestampType());// TODO: Add TimeSyncNode syncCallback()
 
                     this->execMap_[i.first] = new rclcpp::executors::SingleThreadedExecutor();
                     this->execMap_[i.first]->add_node(i.second.node);

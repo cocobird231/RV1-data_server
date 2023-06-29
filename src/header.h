@@ -501,50 +501,13 @@ void SaveQueue<WriteGroundDetectStruct>::_saveTh(size_t queID)// WriteGroundDete
 * ================================================================================
 */
 
-// Base class for TopicRecordNode class, aimed for generic function calling from manager node (e.g. ScanTopicNode class under main.cpp).
-class BaseTopicRecordNode : public rclcpp::Node
-{
-private:
-    std::atomic<uint8_t> stampType_;
-    rclcpp::Duration* offset_;
-    std::mutex offsetLock_;
-
-public:
-    BaseTopicRecordNode(const std::string& nodeName) : rclcpp::Node(nodeName), 
-        stampType_(vehicle_interfaces::msg::Header::STAMPTYPE_NO_SYNC)
-    {
-        this->offset_ = new rclcpp::Duration(0, 0);
-    }
-
-    void setOffset(rclcpp::Duration offset, uint8_t type)
-    {
-        std::lock_guard<std::mutex> locker(this->offsetLock_);
-        *this->offset_ = offset;
-        this->stampType_ = type;
-    }
-
-    rclcpp::Time getTimestamp()
-    {
-        std::lock_guard<std::mutex> locker(this->offsetLock_);
-        return this->get_clock()->now() + *this->offset_;
-    }
-
-    rclcpp::Duration getCorrectDuration()
-    {
-        std::lock_guard<std::mutex> locker(this->offsetLock_);
-        return *this->offset_;
-    }
-
-    uint8_t getTimestampType() { return this->stampType_; }
-};
-
 /*
 *	Parent class for ROS2 subscription nodes, managing subscription message and formed into message nodes.
 *	Recommend children class calling addLatestMsgNodePackTag() at constructor to add self MsgNode pointer to record package.
 *	When subscription callback function called, children class can easily pass header message into setHeaderNodes() to formed header nodes, 
 *	but the self MsgNode data need to be set manually by calling setContent() provided by MsgNode class.
 */
-class TopicRecordNode : public BaseTopicRecordNode
+class TopicRecordNode : public PseudoTimeSyncNode
 {
 private:
     struct HeaderMsgNodes
@@ -553,15 +516,15 @@ private:
         MsgNode device_type;
         MsgNode device_id;
         MsgNode frame_id;
-        MsgNode stamp_type;// Described timestamp status
-        MsgNode stamp;// Device timestamp
-        MsgNode stamp_offset;// Device timestamp offset
+        MsgNode stamp_type;// Described timestamp status (msg::Header::STAMPTYPE_XXX)
+        MsgNode stamp;// Device timestamp (sec in double type)
+        MsgNode stamp_offset;// Device timestamp offset (nsec in int64 type)
         MsgNode ref_publish_time_ms;// Referenced publish time interval
 
-        MsgNode record_stamp_type;// QoS analyzing
-        MsgNode record_stamp;// QoS analyzing
-        MsgNode record_stamp_offset;// QoS analyzing
-        MsgNode record_frame_id;// QoS analyzing
+        MsgNode record_stamp_type;// QoS analyzing (msg::Header::STAMPTYPE_XXX)
+        MsgNode record_stamp;// QoS analyzing (sec in double type)
+        MsgNode record_stamp_offset;// QoS analyzing (nsec in int64 type)
+        MsgNode record_frame_id;// QoS analyzing (data recv counter between subscription and sampling)
 
     } headerNodes_;
     std::map<std::string, MsgNode*> latestMsgNodePack_;
@@ -571,7 +534,7 @@ private:
     std::atomic<uint64_t> recvFrameID_;
 
 public:
-    TopicRecordNode(std::string nodeName) : BaseTopicRecordNode(nodeName)
+    TopicRecordNode(std::string nodeName) : PseudoTimeSyncNode(nodeName), rclcpp::Node(nodeName)
     {
         this->initF_ = false;
         this->recvFrameID_ = 0;
@@ -644,7 +607,7 @@ class TopicRecordSavingNode : public TopicRecordNode
 {
 public:
     std::string outputDir_;
-    TopicRecordSavingNode(const std::string& nodeName, const std::string& outputDir) : TopicRecordNode(nodeName)
+    TopicRecordSavingNode(const std::string& nodeName, const std::string& outputDir) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         if (outputDir.back() == '/')
             this->outputDir_ = outputDir;
@@ -695,7 +658,7 @@ private:
     }
 
 public:
-    DistanceSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    DistanceSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("min", &this->dataNodes.min);
@@ -739,7 +702,7 @@ private:
     }
 
 public:
-    EnvironmentSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    EnvironmentSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("temperature", &this->dataNodes.temperature);
@@ -781,7 +744,7 @@ private:
     }
 
 public:
-    GPSSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    GPSSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("gps_status", &this->dataNodes.gps_status);
         addLatestMsgNodePackTag("latitude", &this->dataNodes.latitude);
@@ -875,7 +838,9 @@ private:
     }
 
 public:
-    GroundDetectSubNode(const std::string& nodeName, const std::string& topicName, const std::string& outputDir, SaveQueue<WriteGroundDetectStruct>* saveQue) : TopicRecordSavingNode(nodeName, outputDir)
+    GroundDetectSubNode(const std::string& nodeName, const std::string& topicName, const std::string& outputDir, SaveQueue<WriteGroundDetectStruct>* saveQue) : 
+        TopicRecordSavingNode(nodeName, outputDir), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("rgb_topic_name", &this->dataNodes.rgb_topic_name);
         addLatestMsgNodePackTag("rgb_frame_id", &this->dataNodes.rgb_frame_id);
@@ -922,7 +887,7 @@ private:
     }
 
 public:
-    IDTableSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    IDTableSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("idtable", &this->dataNodes.idtable);
 
@@ -1004,7 +969,9 @@ private:
     }
 
 public:
-    ImageSubNode(const std::string& nodeName, const std::string& topicName, const std::string& outputDir, SaveImgQueue* saveImgQue) : TopicRecordSavingNode(nodeName, outputDir)
+    ImageSubNode(const std::string& nodeName, const std::string& topicName, const std::string& outputDir, SaveImgQueue* saveImgQue) : 
+        TopicRecordSavingNode(nodeName, outputDir), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("width", &this->dataNodes.width);
         addLatestMsgNodePackTag("height", &this->dataNodes.height);
@@ -1054,7 +1021,7 @@ private:
     }
 
 public:
-    IMUSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    IMUSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("orientation", &this->dataNodes.orientation);
@@ -1102,7 +1069,7 @@ private:
     }
 
 public:
-    MillitBrakeMotorSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    MillitBrakeMotorSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("travel_min", &this->dataNodes.travel_min);
         addLatestMsgNodePackTag("travel_max", &this->dataNodes.travel_max);
@@ -1157,7 +1124,7 @@ private:
     }
 
 public:
-    MillitPowerMotorSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    MillitPowerMotorSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("motor_mode", &this->dataNodes.motor_mode);
         addLatestMsgNodePackTag("rpm", &this->dataNodes.rpm);
@@ -1203,7 +1170,7 @@ private:
     }
 
 public:
-    MotorAxleSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    MotorAxleSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("dir", &this->dataNodes.dir);
         addLatestMsgNodePackTag("pwm", &this->dataNodes.pwm);
@@ -1248,7 +1215,7 @@ private:
     }
 
 public:
-    MotorSteeringSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    MotorSteeringSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("min", &this->dataNodes.min);
@@ -1296,7 +1263,7 @@ private:
     }
 
 public:
-    UPSSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    UPSSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("volt_in", &this->dataNodes.volt_in);
         addLatestMsgNodePackTag("amp_in", &this->dataNodes.amp_in);
@@ -1349,7 +1316,7 @@ private:
     }
 
 public:
-    WheelStateSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName)
+    WheelStateSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("gear", &this->dataNodes.gear);
         addLatestMsgNodePackTag("steering", &this->dataNodes.steering);
@@ -1397,7 +1364,9 @@ public:
     SaveImgQueue* saveImgQue_;
 
 public:
-    BaseMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue) : TopicRecordNode(nodeName), 
+    BaseMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue) : 
+        TopicRecordNode(nodeName), 
+        rclcpp::Node(nodeName), 
         recvMatInitF_(false), 
         newRecvMatF_(false)
     {
@@ -1512,7 +1481,9 @@ private:
     }
 
 public:
-    RGBMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue, const std::string& topicName) : BaseMatSubNode(nodeName, outputDIR, saveImgQue)
+    RGBMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue, const std::string& topicName) : 
+        BaseMatSubNode(nodeName, outputDIR, saveImgQue), 
+        rclcpp::Node(nodeName)
     {
         this->setInitMat(cv::Mat(360, 640, CV_8UC4, cv::Scalar(50)));
         // ROS2 QoS
@@ -1558,7 +1529,9 @@ private:
     }
 
 public:
-    DepthMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue, const std::string& topicName) : BaseMatSubNode(nodeName, outputDIR, saveImgQue)
+    DepthMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue, const std::string& topicName) : 
+        BaseMatSubNode(nodeName, outputDIR, saveImgQue), 
+        rclcpp::Node(nodeName)
     {
         this->setInitMat(cv::Mat(360, 640, CV_32FC1, cv::Scalar(50)));
         // ROS2 QoS
