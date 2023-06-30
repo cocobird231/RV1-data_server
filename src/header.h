@@ -507,7 +507,7 @@ void SaveQueue<WriteGroundDetectStruct>::_saveTh(size_t queID)// WriteGroundDete
 *	When subscription callback function called, children class can easily pass header message into setHeaderNodes() to formed header nodes, 
 *	but the self MsgNode data need to be set manually by calling setContent() provided by MsgNode class.
 */
-class TopicRecordNode : public PseudoTimeSyncNode
+class TopicRecordNode : public vehicle_interfaces::PseudoTimeSyncNode
 {
 private:
     struct HeaderMsgNodes
@@ -534,7 +534,9 @@ private:
     std::atomic<uint64_t> recvFrameID_;
 
 public:
-    TopicRecordNode(std::string nodeName) : PseudoTimeSyncNode(nodeName), rclcpp::Node(nodeName)
+    TopicRecordNode(std::string nodeName) : 
+        vehicle_interfaces::PseudoTimeSyncNode(nodeName), 
+        rclcpp::Node(nodeName)
     {
         this->initF_ = false;
         this->recvFrameID_ = 0;
@@ -568,7 +570,7 @@ public:
         this->headerNodes_.stamp_type.setContent(header->stamp_type);
         double stamp = header->stamp.sec + (double)header->stamp.nanosec / 1000000000.0;
         this->headerNodes_.stamp.setContent(stamp);
-        this->headerNodes_.stamp_offset.setContent(static_cast<int64_t>(static_cast<rclcpp::Duration>(header->stamp_offset).nanoseconds()));
+        this->headerNodes_.stamp_offset.setContent(header->stamp_offset);
         this->headerNodes_.ref_publish_time_ms.setContent(header->ref_publish_time_ms);
 
         this->headerNodes_.record_stamp_type.setContent(this->getTimestampType());
@@ -1721,7 +1723,7 @@ private:
     float rate_;
     int frameCnt_;
     std::chrono::duration<int, std::milli> interval_ms_;
-    Timer* timer_;
+    vehicle_interfaces::Timer* timer_;
 
     std::mutex locker_;
 
@@ -1754,7 +1756,7 @@ public:
         this->rate_ = 0;
         this->frameCnt_ = 0;
         this->interval_ms_ = std::chrono::milliseconds(interval_ms);
-        this->timer_ = new Timer(interval_ms, std::bind(&WorkingRate::_timerCallback, this));
+        this->timer_ = new vehicle_interfaces::Timer(interval_ms, std::bind(&WorkingRate::_timerCallback, this));
     }
 
     ~WorkingRate()

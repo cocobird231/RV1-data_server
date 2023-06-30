@@ -2,10 +2,10 @@
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include "vehicle_interfaces/params.h"
 
-#define TS_MODE
+// #define TS_NODE
 
-#ifdef TS_MODE
-class ScanTopicNode : public TimeSyncNode
+#ifdef TS_NODE
+class ScanTopicNode : public vehicle_interfaces::TimeSyncNode
 #else
 class ScanTopicNode : public rclcpp::Node
 #endif
@@ -64,10 +64,10 @@ private:
     SaveQueue<WriteGroundDetectStruct>* globalGndQue_;
     
     // Timer definitions
-    Timer* monitorTimer_;// Scan topics on lan
-    Timer* sampleTimer_;// Grab topic messages at fixed rate
-    Timer* dumpTimer_;// Dump packPtr_ buffer into file
-    Timer* recordTimer_;// Total execute time.
+    vehicle_interfaces::Timer* monitorTimer_;// Scan topics on lan
+    vehicle_interfaces::Timer* sampleTimer_;// Grab topic messages at fixed rate
+    vehicle_interfaces::Timer* dumpTimer_;// Dump packPtr_ buffer into file
+    vehicle_interfaces::Timer* recordTimer_;// Total execute time.
 
     bool stopMonitorF_;// Stop monitor timer flag
     
@@ -122,7 +122,7 @@ private:
                     this->recordTime_s = param.as_double();
                     if (this->recordTimer_ == nullptr)
                     {
-                        this->recordTimer_ = new Timer(this->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
+                        this->recordTimer_ = new vehicle_interfaces::Timer(this->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
                     }
                         
                     else
@@ -205,9 +205,9 @@ private:
                         i.second.node = std::make_shared<WheelStateSubNode>(subNodeName, i.first);
                     else
                         continue;
-                    
+#ifdef TS_NODE
                     i.second.node->syncTime(this->getCorrectDuration(), this->getTimestampType());// TODO: Add TimeSyncNode syncCallback()
-
+#endif
                     this->execMap_[i.first] = new rclcpp::executors::SingleThreadedExecutor();
                     this->execMap_[i.first]->add_node(i.second.node);
                     this->subThMap_[i.first] = std::thread(SpinTopicRecordNodeExecutor, this->execMap_[i.first], i.second.node, i.first);
@@ -321,7 +321,7 @@ private:
         topicContainerLocker.lock();
         TopicContainerPack topicContainerPackTmp = this->topicContainerPack_;
         topicContainerLocker.unlock();
-#ifdef TS_MODE
+#ifdef TS_NODE
         double sampleTimestamp = this->getTimestamp().seconds();
 #else
         double sampleTimestamp = this->get_clock()->now().seconds();
@@ -366,8 +366,8 @@ private:
 
 public:
     ScanTopicNode(const std::shared_ptr<vehicle_interfaces::GenericParams>& gParams) : 
-#ifdef TS_MODE
-        TimeSyncNode(gParams->nodeName, gParams->timesyncService, gParams->timesyncInterval_ms, gParams->timesyncAccuracy_ms), 
+#ifdef TS_NODE
+        vehicle_interfaces::TimeSyncNode(gParams->nodeName, gParams->timesyncService, gParams->timesyncInterval_ms, gParams->timesyncAccuracy_ms), 
 #endif
         rclcpp::Node(gParams->nodeName), 
         stopMonitorF_(false), 
@@ -401,12 +401,12 @@ public:
         this->globalImgQue_ = new SaveImgQueue(this->numOfImgSaveTh, 100);
         this->globalGndQue_ = new SaveQueue<WriteGroundDetectStruct>(this->numOfGndSaveTh, 100);
 
-        this->monitorTimer_ = new Timer(this->topicScanTime_ms, std::bind(&ScanTopicNode::_monitorTimerCallback, this));
+        this->monitorTimer_ = new vehicle_interfaces::Timer(this->topicScanTime_ms, std::bind(&ScanTopicNode::_monitorTimerCallback, this));
         this->monitorTimer_->start();
-        this->sampleTimer_ = new Timer(this->samplingStep_ms, std::bind(&ScanTopicNode::_sampleTimerCallback, this));
-        this->dumpTimer_ = new Timer(this->autoSaveTime_s * 1000, std::bind(&ScanTopicNode::_dumpTimerCallback, this));
+        this->sampleTimer_ = new vehicle_interfaces::Timer(this->samplingStep_ms, std::bind(&ScanTopicNode::_sampleTimerCallback, this));
+        this->dumpTimer_ = new vehicle_interfaces::Timer(this->autoSaveTime_s * 1000, std::bind(&ScanTopicNode::_dumpTimerCallback, this));
         if (this->recordTime_s > 0)
-            this->recordTimer_ = new Timer(this->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
+            this->recordTimer_ = new vehicle_interfaces::Timer(this->recordTime_s * 1000, std::bind(&ScanTopicNode::_recordTimerCallback, this));
         else
             this->recordTimer_ = nullptr;
         this->packPtr_ = &this->pack_;
@@ -416,7 +416,7 @@ public:
     {
         std::lock_guard<std::mutex>(this->externalControlLock_);
         std::cerr << "[ScanTopicNode][startSampling]" << "\n";
-#ifdef TS_MODE
+#ifdef TS_NODE
         this->outFileTimestamp_ = this->getTimestamp().seconds();
 #else
         this->outFileTimestamp_ = this->get_clock()->now().seconds();
@@ -464,7 +464,7 @@ public:
         }
 
         double fileTimestamp = this->outFileTimestamp_;
-#ifdef TS_MODE
+#ifdef TS_NODE
         this->outFileTimestamp_ = this->getTimestamp().seconds();
 #else
         this->outFileTimestamp_ = this->get_clock()->now().seconds();
