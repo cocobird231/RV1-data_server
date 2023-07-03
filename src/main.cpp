@@ -1,14 +1,8 @@
 #include "header.h"
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
-#include "vehicle_interfaces/params.h"
 
-// #define TS_NODE
 
-#ifdef TS_NODE
-class ScanTopicNode : public vehicle_interfaces::TimeSyncNode
-#else
-class ScanTopicNode : public rclcpp::Node
-#endif
+class ScanTopicNode : public vehicle_interfaces::VehicleServiceNode
 {
 private:
     // ScanTopicNode parameters
@@ -205,9 +199,8 @@ private:
                         i.second.node = std::make_shared<WheelStateSubNode>(subNodeName, i.first);
                     else
                         continue;
-#ifdef TS_NODE
+
                     i.second.node->syncTime(this->getCorrectDuration(), this->getTimestampType());// TODO: Add TimeSyncNode syncCallback()
-#endif
                     this->execMap_[i.first] = new rclcpp::executors::SingleThreadedExecutor();
                     this->execMap_[i.first]->add_node(i.second.node);
                     this->subThMap_[i.first] = std::thread(SpinTopicRecordNodeExecutor, this->execMap_[i.first], i.second.node, i.first);
@@ -321,11 +314,7 @@ private:
         topicContainerLocker.lock();
         TopicContainerPack topicContainerPackTmp = this->topicContainerPack_;
         topicContainerLocker.unlock();
-#ifdef TS_NODE
         double sampleTimestamp = this->getTimestamp().seconds();
-#else
-        double sampleTimestamp = this->get_clock()->now().seconds();
-#endif
         locker.lock();
         for (const auto& i : topicContainerPackTmp)
         {
@@ -366,9 +355,7 @@ private:
 
 public:
     ScanTopicNode(const std::shared_ptr<vehicle_interfaces::GenericParams>& gParams) : 
-#ifdef TS_NODE
-        vehicle_interfaces::TimeSyncNode(gParams->nodeName, gParams->timesyncService, gParams->timesyncInterval_ms, gParams->timesyncAccuracy_ms), 
-#endif
+        vehicle_interfaces::VehicleServiceNode(gParams), 
         rclcpp::Node(gParams->nodeName), 
         stopMonitorF_(false), 
         exitF_(false), 
@@ -416,11 +403,7 @@ public:
     {
         std::lock_guard<std::mutex>(this->externalControlLock_);
         std::cerr << "[ScanTopicNode][startSampling]" << "\n";
-#ifdef TS_NODE
         this->outFileTimestamp_ = this->getTimestamp().seconds();
-#else
-        this->outFileTimestamp_ = this->get_clock()->now().seconds();
-#endif
         this->sampleTimer_->start();
         this->dumpTimer_->start();
         if (this->recordTimer_ != nullptr)
@@ -464,11 +447,7 @@ public:
         }
 
         double fileTimestamp = this->outFileTimestamp_;
-#ifdef TS_NODE
         this->outFileTimestamp_ = this->getTimestamp().seconds();
-#else
-        this->outFileTimestamp_ = this->get_clock()->now().seconds();
-#endif
         auto st = std::chrono::steady_clock::now();
         std::ofstream outFile(this->outputFilename + "json/" + std::to_string(fileTimestamp) + ".json");
         printf("Dump json from %s buffer...\n", this->outPackBkF_ ? "packBk_" : "pack_");

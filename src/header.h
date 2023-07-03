@@ -39,8 +39,7 @@
 #include "vehicle_interfaces/msg/wheel_state.hpp"
 
 #include "vehicle_interfaces/srv/id_server.hpp"
-#include "vehicle_interfaces/timesync.h"
-#include "vehicle_interfaces/qos.h"
+#include "vehicle_interfaces/vehicle_interfaces.h"
 
 // Image Process
 #include <opencv2/opencv.hpp>
