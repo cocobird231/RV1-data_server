@@ -181,6 +181,7 @@ struct WriteGroundDetectStruct
     std::vector<int16_t> groundLine;
 };
 
+/*
 
 typedef std::deque<std::pair<std::string, cv::Mat>> ImgPairQue;
 class SaveImgQueue
@@ -299,9 +300,9 @@ public:
     void close() { this->exitF_ = true; }
 };
 
-/*
-
 */
+
+
 template<typename T>
 using PairQue = std::deque<std::pair<std::string, T>>;
 
@@ -495,18 +496,19 @@ void SaveQueue<WriteGroundDetectStruct>::_saveTh(size_t queID)// WriteGroundDete
 }
 
 
-/* ================================================================================
-* 							Base Topic Subscription Node Definitions
-* ================================================================================
+/**
+ * ================================================================================
+ * 							Base Topic Subscription Node Definitions
+ * ================================================================================
 */
 
-/*
-*	Parent class for ROS2 subscription nodes, managing subscription message and formed into message nodes.
-*	Recommend children class calling addLatestMsgNodePackTag() at constructor to add self MsgNode pointer to record package.
-*	When subscription callback function called, children class can easily pass header message into setHeaderNodes() to formed header nodes, 
-*	but the self MsgNode data need to be set manually by calling setContent() provided by MsgNode class.
+/**
+ * Parent class for ROS2 subscription nodes, managing subscription message and formed into message nodes.
+ * Recommend children class calling addLatestMsgNodePackTag() at constructor to add self MsgNode pointer to record package.
+ * When subscription callback function called, children class can easily pass header message into setHeaderNodes() to formed header nodes, 
+ * but the self MsgNode data need to be set manually by calling setContent() provided by MsgNode class.
 */
-class TopicRecordNode : public vehicle_interfaces::PseudoTimeSyncNode
+class TopicRecordNode : public vehicle_interfaces::PseudoTimeSyncNode, public vehicle_interfaces::QoSUpdateNode
 {
 private:
     struct HeaderMsgNodes
@@ -531,11 +533,22 @@ private:
 
     std::atomic<bool> initF_;
     std::atomic<uint64_t> recvFrameID_;
+    std::string topicName_;
+    std::string nodeName_;
+    std::mutex nameLock_;
+
+private:
+    virtual void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap)
+    {
+        RCLCPP_WARN(this->get_logger(), "[TopicRecordNode::_qosCallback] Function not override.");
+    }
 
 public:
-    TopicRecordNode(std::string nodeName) : 
+    TopicRecordNode(std::string nodeName, std::string qosServiceName, std::string qosDirPath) : 
         vehicle_interfaces::PseudoTimeSyncNode(nodeName), 
-        rclcpp::Node(nodeName)
+        vehicle_interfaces::QoSUpdateNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName), 
+            nodeName_(nodeName)
     {
         this->initF_ = false;
         this->recvFrameID_ = 0;
@@ -601,6 +614,18 @@ public:
         locker.unlock();
         return ret;
     }
+
+    void setTopicName(std::string topicName)
+    {
+        std::lock_guard<std::mutex> locker(this->nameLock_);
+        this->topicName_ = topicName;
+    }
+
+    std::string getTopicName()
+    {
+        std::lock_guard<std::mutex> locker(this->nameLock_);
+        return this->topicName_;
+    }
 };
 
 // TopicRecordNode Add mkdir
@@ -608,7 +633,12 @@ class TopicRecordSavingNode : public TopicRecordNode
 {
 public:
     std::string outputDir_;
-    TopicRecordSavingNode(const std::string& nodeName, const std::string& outputDir) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    TopicRecordSavingNode(const std::string& nodeName, 
+                            const std::string& outputDir, 
+                            const std::string& qosServiceName, 
+                            const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         if (outputDir.back() == '/')
             this->outputDir_ = outputDir;
@@ -621,15 +651,15 @@ public:
 };
 
 
-/* ================================================================================
-* 							Topic Subscription Node Definitions
-* ================================================================================
+/**
+ * ================================================================================
+ * 							Topic Subscription Node Definitions
+ * ================================================================================
 */
 
 
-
-/*
-* Message Type: Distance
+/**
+ * Message Type: Distance
 */
 class DistanceSubNode : public TopicRecordNode
 {
@@ -646,7 +676,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::Distance::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::Distance::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.unit_type.setContent(msg->unit_type);
@@ -658,22 +688,44 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Distance>(topicName, 
+                    *v, std::bind(&DistanceSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    DistanceSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    DistanceSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("min", &this->dataNodes.min);
         addLatestMsgNodePackTag("max", &this->dataNodes.max);
         addLatestMsgNodePackTag("distance", &this->dataNodes.distance);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&DistanceSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Distance>(topicName, 
-            10, std::bind(&DistanceSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&DistanceSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: Environment
+/**
+ * Message Type: Environment
 */
 class EnvironmentSubNode : public TopicRecordNode
 {
@@ -690,7 +742,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::Environment::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::Environment::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.unit_type.setContent(msg->unit_type);
@@ -702,22 +754,44 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Environment>(topicName, 
+                    *v, std::bind(&EnvironmentSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    EnvironmentSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    EnvironmentSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("temperature", &this->dataNodes.temperature);
         addLatestMsgNodePackTag("relative_humidity", &this->dataNodes.relative_humidity);
         addLatestMsgNodePackTag("pressure", &this->dataNodes.pressure);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&EnvironmentSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Environment>(topicName, 
-            10, std::bind(&EnvironmentSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&EnvironmentSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: GPS
+/**
+ * Message Type: GPS
 */
 class GPSSubNode : public TopicRecordNode
 {
@@ -733,7 +807,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::GPS::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::GPS::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.gps_status.setContent(msg->gps_status);
@@ -744,21 +818,43 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::GPS>(topicName, 
+                    *v, std::bind(&GPSSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    GPSSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    GPSSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("gps_status", &this->dataNodes.gps_status);
         addLatestMsgNodePackTag("latitude", &this->dataNodes.latitude);
         addLatestMsgNodePackTag("longitude", &this->dataNodes.longitude);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&GPSSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::GPS>(topicName, 
-            10, std::bind(&GPSSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&GPSSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: GroundDetect
+/**
+ * Message Type: GroundDetect
 */
 class GroundDetectSubNode : public TopicRecordSavingNode
 {
@@ -783,7 +879,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::GroundDetect::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::GroundDetect::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.rgb_topic_name.setContent(msg->rgb_topic_name);
@@ -838,9 +934,28 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::GroundDetect>(topicName, 
+                    *v, std::bind(&GroundDetectSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    GroundDetectSubNode(const std::string& nodeName, const std::string& topicName, const std::string& outputDir, SaveQueue<WriteGroundDetectStruct>* saveQue) : 
-        TopicRecordSavingNode(nodeName, outputDir), 
+    GroundDetectSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& outputDir, 
+                    SaveQueue<WriteGroundDetectStruct>* saveQue, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordSavingNode(nodeName, outputDir, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("rgb_topic_name", &this->dataNodes.rgb_topic_name);
@@ -854,14 +969,17 @@ public:
         this->nodeName_ = nodeName;
         this->saveQue_ = saveQue;
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&GroundDetectSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::GroundDetect>(topicName, 
-            10, std::bind(&GroundDetectSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&GroundDetectSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: IDTable
+/**
+ * Message Type: IDTable
 */
 class IDTableSubNode : public TopicRecordNode
 {
@@ -875,7 +993,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::IDTable::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::IDTable::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.idtable.setContent(msg->idtable);
@@ -887,19 +1005,41 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::IDTable>(topicName, 
+                    *v, std::bind(&IDTableSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    IDTableSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    IDTableSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("idtable", &this->dataNodes.idtable);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&IDTableSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::IDTable>(topicName, 
-            10, std::bind(&IDTableSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&IDTableSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: Image
+/**
+ * Message Type: Image
 */
 class ImageSubNode : public TopicRecordSavingNode
 {
@@ -912,8 +1052,8 @@ private:
     std::atomic<bool> newMatF_;
     std::mutex recvMatLock_;
 
-    /* SaveImgQueue method */
-    SaveImgQueue* saveImgQue_;
+    /* SaveQueue method */
+    SaveQueue<cv::Mat>* saveImgQue_;// MOD: change to generic SaveQue method instead of SaveImgQueue
 
 public:
     struct DataMsgNodes
@@ -924,7 +1064,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::Image::SharedPtr msg)// JPEG Only
+    void _topicCallback(const vehicle_interfaces::msg::Image::SharedPtr msg)// JPEG Only
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.width.setContent(msg->width);
@@ -969,9 +1109,28 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Image>(topicName, 
+                    *v, std::bind(&ImageSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    ImageSubNode(const std::string& nodeName, const std::string& topicName, const std::string& outputDir, SaveImgQueue* saveImgQue) : 
-        TopicRecordSavingNode(nodeName, outputDir), 
+    ImageSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& outputDir, 
+                    SaveQueue<cv::Mat>* saveQue, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordSavingNode(nodeName, outputDir, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("width", &this->dataNodes.width);
@@ -981,16 +1140,19 @@ public:
         this->recvMat_ = cv::Mat(1080, 1920, CV_8UC4, cv::Scalar(50));
         this->initMatF_ = true;
         this->nodeName_ = nodeName;
-        this->saveImgQue_ = saveImgQue;
+        this->saveImgQue_ = saveQue;
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&ImageSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Image>(topicName, 
-            10, std::bind(&ImageSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&ImageSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: IMU
+/**
+ * Message Type: IMU
 */
 class IMUSubNode : public TopicRecordNode
 {
@@ -1007,7 +1169,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::IMU::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::IMU::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.unit_type.setContent(msg->unit_type);
@@ -1021,22 +1183,44 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::IMU>(topicName, 
+                    *v, std::bind(&IMUSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    IMUSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    IMUSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("orientation", &this->dataNodes.orientation);
         addLatestMsgNodePackTag("angular_velocity", &this->dataNodes.angular_velocity);
         addLatestMsgNodePackTag("linear_acceleration", &this->dataNodes.linear_acceleration);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&IMUSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::IMU>(topicName, 
-            10, std::bind(&IMUSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&IMUSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: MillitBrakeMotor
+/**
+ * Message Type: MillitBrakeMotor
 */
 class MillitBrakeMotorSubNode : public TopicRecordNode
 {
@@ -1054,7 +1238,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::MillitBrakeMotor::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::MillitBrakeMotor::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.travel_min.setContent(msg->travel_min);
@@ -1069,8 +1253,27 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MillitBrakeMotor>(topicName, 
+                    *v, std::bind(&MillitBrakeMotorSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    MillitBrakeMotorSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    MillitBrakeMotorSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("travel_min", &this->dataNodes.travel_min);
         addLatestMsgNodePackTag("travel_max", &this->dataNodes.travel_max);
@@ -1078,14 +1281,17 @@ public:
         addLatestMsgNodePackTag("brake_percentage", &this->dataNodes.brake_percentage);
         addLatestMsgNodePackTag("external_control", &this->dataNodes.external_control);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&MillitBrakeMotorSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MillitBrakeMotor>(topicName, 
-            10, std::bind(&MillitBrakeMotorSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&MillitBrakeMotorSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: MillitPowerMotor
+/**
+ * Message Type: MillitPowerMotor
 */
 class MillitPowerMotorSubNode : public TopicRecordNode
 {
@@ -1106,7 +1312,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::MillitPowerMotor::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::MillitPowerMotor::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.motor_mode.setContent(msg->motor_mode);
@@ -1124,8 +1330,27 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MillitPowerMotor>(topicName, 
+                    *v, std::bind(&MillitPowerMotorSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    MillitPowerMotorSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    MillitPowerMotorSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("motor_mode", &this->dataNodes.motor_mode);
         addLatestMsgNodePackTag("rpm", &this->dataNodes.rpm);
@@ -1136,14 +1361,17 @@ public:
         addLatestMsgNodePackTag("temperature", &this->dataNodes.temperature);
         addLatestMsgNodePackTag("parking", &this->dataNodes.parking);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&MillitPowerMotorSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MillitPowerMotor>(topicName, 
-            10, std::bind(&MillitPowerMotorSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&MillitPowerMotorSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: MotorAxle
+/**
+ * Message Type: MotorAxle
 */
 class MotorAxleSubNode : public TopicRecordNode
 {
@@ -1159,7 +1387,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::MotorAxle::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::MotorAxle::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.dir.setContent(msg->dir);
@@ -1170,21 +1398,43 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MotorAxle>(topicName, 
+                    *v, std::bind(&MotorAxleSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    MotorAxleSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    MotorAxleSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("dir", &this->dataNodes.dir);
         addLatestMsgNodePackTag("pwm", &this->dataNodes.pwm);
         addLatestMsgNodePackTag("parking", &this->dataNodes.parking);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&MotorAxleSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MotorAxle>(topicName, 
-            10, std::bind(&MotorAxleSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&MotorAxleSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: MotorAxle
+/**
+ * Message Type: MotorAxle
 */
 class MotorSteeringSubNode : public TopicRecordNode
 {
@@ -1202,7 +1452,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::MotorSteering::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::MotorSteering::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.unit_type.setContent(msg->unit_type);
@@ -1215,8 +1465,27 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MotorSteering>(topicName, 
+                    *v, std::bind(&MotorSteeringSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    MotorSteeringSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    MotorSteeringSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("min", &this->dataNodes.min);
@@ -1224,14 +1493,17 @@ public:
         addLatestMsgNodePackTag("center", &this->dataNodes.center);
         addLatestMsgNodePackTag("value", &this->dataNodes.value);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&MotorSteeringSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::MotorSteering>(topicName, 
-            10, std::bind(&MotorSteeringSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&MotorSteeringSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: UPS
+/**
+ * Message Type: UPS
 */
 class UPSSubNode : public TopicRecordNode
 {
@@ -1249,7 +1521,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::UPS::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::UPS::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.volt_in.setContent(msg->volt_in);
@@ -1263,8 +1535,27 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::UPS>(topicName, 
+                    *v, std::bind(&UPSSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    UPSSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    UPSSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("volt_in", &this->dataNodes.volt_in);
         addLatestMsgNodePackTag("amp_in", &this->dataNodes.amp_in);
@@ -1272,14 +1563,17 @@ public:
         addLatestMsgNodePackTag("amp_out", &this->dataNodes.amp_out);
         addLatestMsgNodePackTag("temperature", &this->dataNodes.temperature);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&UPSSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::UPS>(topicName, 
-            10, std::bind(&UPSSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&UPSSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
-/*
-* Message Type: WheelState
+/**
+ * Message Type: WheelState
 */
 class WheelStateSubNode : public TopicRecordNode
 {
@@ -1299,7 +1593,7 @@ public:
     } dataNodes;
 
 private:
-    void _topic_callback(const vehicle_interfaces::msg::WheelState::SharedPtr msg)
+    void _topicCallback(const vehicle_interfaces::msg::WheelState::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.gear.setContent(msg->gear);
@@ -1316,8 +1610,27 @@ private:
 #endif
     }
 
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::WheelState>(topicName, 
+                    *v, std::bind(&WheelStateSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
 public:
-    WheelStateSubNode(const std::string& nodeName, const std::string& topicName) : TopicRecordNode(nodeName), rclcpp::Node(nodeName)
+    WheelStateSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
     {
         addLatestMsgNodePackTag("gear", &this->dataNodes.gear);
         addLatestMsgNodePackTag("steering", &this->dataNodes.steering);
@@ -1327,22 +1640,25 @@ public:
         addLatestMsgNodePackTag("button", &this->dataNodes.button);
         addLatestMsgNodePackTag("func", &this->dataNodes.func);
 
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&WheelStateSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
         this->subscription_ = this->create_subscription<vehicle_interfaces::msg::WheelState>(topicName, 
-            10, std::bind(&WheelStateSubNode::_topic_callback, this, std::placeholders::_1));
+            *qpair.second, std::bind(&WheelStateSubNode::_topicCallback, this, std::placeholders::_1));
     }
 };
 
 
 
-/*
-* ZED Image Process
+/**
+ * ZED Image Process (Deprecated)
 */
 
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/image_encodings.hpp"
 
-class BaseMatSubNode : public TopicRecordNode
+class BaseMatSubNode : public TopicRecordSavingNode
 {
 private:
     cv::Mat recvMat_;
@@ -1361,12 +1677,16 @@ public:
     std::string nodeName_;
     std::string outputDIR_;
 
-    /* SaveImgQueue method */
-    SaveImgQueue* saveImgQue_;
+    /* SaveQueue method */
+    SaveQueue<cv::Mat>* saveImgQue_;
 
 public:
-    BaseMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue) : 
-        TopicRecordNode(nodeName), 
+    BaseMatSubNode(const std::string& nodeName, 
+                    const std::string& outputDir, 
+                    SaveQueue<cv::Mat>* saveImgQue, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordSavingNode(nodeName, outputDir, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName), 
         recvMatInitF_(false), 
         newRecvMatF_(false)
@@ -1375,15 +1695,6 @@ public:
         addLatestMsgNodePackTag("width", &this->dataNodes.width);
         addLatestMsgNodePackTag("filename", &this->dataNodes.filename);
         this->nodeName_ = nodeName;
-        // Create <nodeName> directory under <outputDIR> directory
-        if (outputDIR.back() == '/')
-            this->outputDIR_ = outputDIR;
-        else
-            this->outputDIR_ = outputDIR + '/';
-        char buf[128];
-        sprintf(buf, "mkdir -p %s%s", this->outputDIR_.c_str(), this->nodeName_.c_str());
-        const int dir_err = system(buf);
-
         this->saveImgQue_ = saveImgQue;
     }
 
@@ -1482,8 +1793,13 @@ private:
     }
 
 public:
-    RGBMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue, const std::string& topicName) : 
-        BaseMatSubNode(nodeName, outputDIR, saveImgQue), 
+    RGBMatSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& outputDIR, 
+                    SaveQueue<cv::Mat>* saveImgQue, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        BaseMatSubNode(nodeName, outputDIR, saveImgQue, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName)
     {
         this->setInitMat(cv::Mat(360, 640, CV_8UC4, cv::Scalar(50)));
@@ -1530,8 +1846,13 @@ private:
     }
 
 public:
-    DepthMatSubNode(const std::string& nodeName, const std::string& outputDIR, SaveImgQueue* saveImgQue, const std::string& topicName) : 
-        BaseMatSubNode(nodeName, outputDIR, saveImgQue), 
+    DepthMatSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& outputDIR, 
+                    SaveQueue<cv::Mat>* saveImgQue, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        BaseMatSubNode(nodeName, outputDIR, saveImgQue, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName)
     {
         this->setInitMat(cv::Mat(360, 640, CV_32FC1, cv::Scalar(50)));

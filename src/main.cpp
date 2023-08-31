@@ -5,6 +5,9 @@
 class ScanTopicNode : public vehicle_interfaces::VehicleServiceNode
 {
 private:
+    // gParams
+    std::shared_ptr<vehicle_interfaces::GenericParams> gParams_;
+
     // ScanTopicNode parameters
     float topicScanTime_ms = 1000.0;
     std::string subscribeMsgPack = "vehicle_interfaces";
@@ -54,7 +57,8 @@ private:
     std::atomic<double> outFileTimestamp_;// File name in timestamp
 
     // Save image queue, pass into subscribe node which contains Image message type
-    SaveImgQueue* globalImgQue_;
+    // SaveImgQueue* globalImgQue_;// OLD
+    SaveQueue<cv::Mat>* globalImgQue_;// OLD
     SaveQueue<WriteGroundDetectStruct>* globalGndQue_;
     
     // Timer definitions
@@ -172,31 +176,31 @@ private:
                     replace_all(subNodeName, "/", "_");
 
                     if (msgTypeSplit[2] == "Distance")
-                        i.second.node = std::make_shared<DistanceSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<DistanceSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "Environment")
-                        i.second.node = std::make_shared<EnvironmentSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<EnvironmentSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "GPS")
-                        i.second.node = std::make_shared<GPSSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<GPSSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "GroundDetect")
-                        i.second.node = std::make_shared<GroundDetectSubNode>(subNodeName, i.first, this->outputFilename, this->globalGndQue_);
+                        i.second.node = std::make_shared<GroundDetectSubNode>(subNodeName, i.first, this->outputFilename, this->globalGndQue_, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "IDTable")
-                        i.second.node = std::make_shared<IDTableSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<IDTableSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "Image")
-                        i.second.node = std::make_shared<ImageSubNode>(subNodeName, i.first, this->outputFilename, this->globalImgQue_);
+                        i.second.node = std::make_shared<ImageSubNode>(subNodeName, i.first, this->outputFilename, this->globalImgQue_, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "IMU")
-                        i.second.node = std::make_shared<IMUSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<IMUSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "MillitBrakeMotor")
-                        i.second.node = std::make_shared<MillitBrakeMotorSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<MillitBrakeMotorSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "MillitPowerMotor")
-                        i.second.node = std::make_shared<MillitPowerMotorSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<MillitPowerMotorSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "MotorAxle")
-                        i.second.node = std::make_shared<MotorAxleSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<MotorAxleSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "MotorSteering")
-                        i.second.node = std::make_shared<MotorSteeringSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<MotorSteeringSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "UPS")
-                        i.second.node = std::make_shared<UPSSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<UPSSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "WheelState")
-                        i.second.node = std::make_shared<WheelStateSubNode>(subNodeName, i.first);
+                        i.second.node = std::make_shared<WheelStateSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else
                         continue;
 
@@ -215,13 +219,13 @@ private:
                     {
                         std::string subNodeName = i.first.substr(1) + "_node";
                         replace_all(subNodeName, "/", "_");
-                        i.second.node = std::make_shared<RGBMatSubNode>(subNodeName, outputFilename, this->globalImgQue_, i.first);
+                        i.second.node = std::make_shared<RGBMatSubNode>(subNodeName, i.first, outputFilename, this->globalImgQue_, gParams_->qosService, gParams_->qosDirPath);
                     }
                     else if (ElementInVector(i.first, this->zedDepthTopicNameList))
                     {
                         std::string subNodeName = i.first.substr(1) + "_node";
                         replace_all(subNodeName, "/", "_");
-                        i.second.node = std::make_shared<DepthMatSubNode>(subNodeName, outputFilename, this->globalImgQue_, i.first);
+                        i.second.node = std::make_shared<DepthMatSubNode>(subNodeName, i.first, outputFilename, this->globalImgQue_, gParams_->qosService, gParams_->qosDirPath);
                     }
                     else
                         continue;
@@ -360,7 +364,8 @@ public:
         stopMonitorF_(false), 
         exitF_(false), 
         nodeDetectF_(false), 
-        outPackBkF_(false)
+        outPackBkF_(false), 
+        gParams_(gParams)
     {
         this->declare_parameter<float>("topicScanTime_ms", this->topicScanTime_ms);
         this->declare_parameter<std::string>("subscribeMsgPack", this->subscribeMsgPack);
@@ -385,7 +390,7 @@ public:
         // Node and topic relation table
         this->nodeDetectF_ = this->nodeTopicMsgTable_.loadTable("NodeTopicTable.json");
 
-        this->globalImgQue_ = new SaveImgQueue(this->numOfImgSaveTh, 100);
+        this->globalImgQue_ = new SaveQueue<cv::Mat>(this->numOfImgSaveTh, 100);
         this->globalGndQue_ = new SaveQueue<WriteGroundDetectStruct>(this->numOfGndSaveTh, 100);
 
         this->monitorTimer_ = new vehicle_interfaces::Timer(this->topicScanTime_ms, std::bind(&ScanTopicNode::_monitorTimerCallback, this));
