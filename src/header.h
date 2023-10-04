@@ -181,128 +181,6 @@ struct WriteGroundDetectStruct
     std::vector<int16_t> groundLine;
 };
 
-/*
-
-typedef std::deque<std::pair<std::string, cv::Mat>> ImgPairQue;
-class SaveImgQueue
-{
-private:
-    std::deque<ImgPairQue> totalImgPairQue_;
-
-    std::vector<std::thread> thVec_;
-    std::vector<std::timed_mutex> queLockVec_;
-    size_t thNum_;
-
-    std::atomic<size_t> thSelect_;
-    std::mutex thSelectLock_;
-
-    int interval_ms_;
-
-    std::atomic<bool> exitF_;
-
-private:
-    void _saveImgTh(size_t queID)
-    {
-        std::unique_lock<std::timed_mutex> locker(this->queLockVec_[queID], std::defer_lock);
-        ImgPairQue* imgPairQuePtr = &this->totalImgPairQue_[queID];
-        bool emptyF = true;
-        std::string fileName;
-        cv::Mat img;
-        while (!(this->exitF_ && emptyF))
-        {
-            if (locker.try_lock_for(5ms))
-            {
-                if (imgPairQuePtr->empty())
-                {
-                    emptyF = true;
-                    locker.unlock();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
-                    continue;
-                }
-                const std::pair<std::string, cv::Mat>& item = imgPairQuePtr->front();
-                fileName = item.first;
-                img = item.second.clone();
-                imgPairQuePtr->pop_front();
-                emptyF = false;
-                locker.unlock();
-                cv::imwrite(fileName, img);
-            }
-            else
-                std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
-        }
-    }
-
-    size_t _getSaveImgQueID()
-    {
-        std::unique_lock<std::mutex> locker(this->thSelectLock_, std::defer_lock);
-        size_t ret;
-        locker.lock();
-        ret = (++this->thSelect_) % this->thNum_;
-        this->thSelect_ = ret;
-        locker.unlock();
-        return ret;
-    }
-
-public:
-    SaveImgQueue(size_t thNum = 1, int scanInterval_ms = 100) : exitF_(false), thSelect_(0)
-    {
-        this->thNum_ = thNum;
-        this->interval_ms_ = scanInterval_ms;
-        
-        this->queLockVec_ = std::vector<std::timed_mutex>(thNum);
-        this->totalImgPairQue_ = std::deque<ImgPairQue>(thNum);
-
-        for (size_t i = 0; i < thNum; i++)
-            this->thVec_.emplace_back(&SaveImgQueue::_saveImgTh, this, i);
-    }
-
-    ~SaveImgQueue()
-    {
-        this->exitF_ = true;
-        for (size_t i = 0; i < this->thNum_; i++)
-            this->thVec_[i].join();
-    }
-
-    void push(const std::string& fileName, cv::Mat& img)
-    {
-        auto id = _getSaveImgQueID();
-        std::unique_lock<std::timed_mutex> locker(this->queLockVec_[id], std::defer_lock);
-        locker.lock();
-        this->totalImgPairQue_[id].emplace_back(fileName, img);
-        locker.unlock();
-    }
-
-    std::vector<size_t> getSize()
-    {
-        std::vector<size_t> ret(thNum_, 0);
-        for (size_t i = 0; i < this->thNum_; i++)
-        {
-            std::unique_lock<std::timed_mutex> locker(this->queLockVec_[i], std::defer_lock);
-            locker.lock();
-            ret[i] = this->totalImgPairQue_[i].size();
-            locker.unlock();
-        }
-        return ret;
-    }
-
-    void shrink_to_fit()
-    {
-        for (size_t i = 0; i < this->thNum_; i++)
-        {
-            std::unique_lock<std::timed_mutex> locker(this->queLockVec_[i], std::defer_lock);
-            locker.lock();
-            //this->totalImgPairQue_[i].shrink_to_fit();
-            ImgPairQue(this->totalImgPairQue_[i]).swap(this->totalImgPairQue_[i]);
-            locker.unlock();
-        }
-    }
-
-    void close() { this->exitF_ = true; }
-};
-
-*/
-
-
 template<typename T>
 using PairQue = std::deque<std::pair<std::string, T>>;
 
@@ -683,9 +561,6 @@ private:
         this->dataNodes.min.setContent(msg->min);
         this->dataNodes.max.setContent(msg->max);
         this->dataNodes.distance.setContent(msg->distance);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: %f", msg->distance);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -749,9 +624,6 @@ private:
         this->dataNodes.temperature.setContent(msg->temperature);
         this->dataNodes.relative_humidity.setContent(msg->relative_humidity);
         this->dataNodes.pressure.setContent(msg->pressure);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: temp: %f\trh: %f\tpress: %f", msg->temperature, msg->relative_humidity, msg->pressure);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -804,6 +676,7 @@ public:
         MsgNode gps_status;
         MsgNode latitude;
         MsgNode longitude;
+        MsgNode altitude;
     } dataNodes;
 
 private:
@@ -813,9 +686,7 @@ private:
         this->dataNodes.gps_status.setContent(msg->gps_status);
         this->dataNodes.latitude.setContent(msg->latitude);
         this->dataNodes.longitude.setContent(msg->longitude);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: lat: %f\tlon: %f", msg->latitude, msg->longitude);
-#endif
+        this->dataNodes.altitude.setContent(msg->altitude);
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -843,6 +714,7 @@ public:
         addLatestMsgNodePackTag("gps_status", &this->dataNodes.gps_status);
         addLatestMsgNodePackTag("latitude", &this->dataNodes.latitude);
         addLatestMsgNodePackTag("longitude", &this->dataNodes.longitude);
+        addLatestMsgNodePackTag("altitude", &this->dataNodes.altitude);
 
         this->setTopicName(topicName);
         this->addQoSCallbackFunc(std::bind(&GPSSubNode::_qosCallback, this, std::placeholders::_1));
@@ -927,11 +799,6 @@ private:
 
         this->saveQue_->push(this->outputDir_ + filename, st);
         locker.unlock();
-
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: [%s]:%ld | [%s]:%ld | (%ld,%ld)", 
-            msg->rgb_topic_name, msg->rgb_frame_id, msg->depth_topic_name, msg->depth_frame_id, msg->width, msg->height);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -997,12 +864,6 @@ private:
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
         this->dataNodes.idtable.setContent(msg->idtable);
-#ifdef NODE_SUBSCRIBE_PRINT
-        std::string outputStr = "";
-        for (const auto& i : msg->idtable)
-            outputStr = outputStr + "\t" + i;
-        RCLCPP_INFO(this->get_logger(), "I heard: table: %s", outputStr.c_str());
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1053,7 +914,7 @@ private:
     std::mutex recvMatLock_;
 
     /* SaveQueue method */
-    SaveQueue<cv::Mat>* saveImgQue_;// MOD: change to generic SaveQue method instead of SaveImgQueue
+    SaveQueue<cv::Mat>* saveImgQue_;
 
 public:
     struct DataMsgNodes
@@ -1103,10 +964,6 @@ private:
             std::cerr << this->nodeName_ << " Unknown Exception.\n";
         }
         lockMat.unlock();
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: foramt: %d, width: %d, height: %d", 
-            msg->format_order_type, msg->width, msg->height);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1176,11 +1033,6 @@ private:
         this->dataNodes.orientation.setContent(msg->orientation);
         this->dataNodes.angular_velocity.setContent(msg->angular_velocity);
         this->dataNodes.linear_acceleration.setContent(msg->linear_acceleration);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: acc: %f %f %f\tgyro: %f %f %f", 
-                    msg->linear_acceleration[0], msg->linear_acceleration[1], msg->linear_acceleration[2], 
-                    msg->angular_velocity[0], msg->angular_velocity[1], msg->angular_velocity[2]);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1246,11 +1098,6 @@ private:
         this->dataNodes.travel.setContent(msg->travel);
         this->dataNodes.brake_percentage.setContent(msg->brake_percentage);
         this->dataNodes.external_control.setContent(msg->external_control);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: min:%d max:%d travel:%d %f(%) | %d", 
-                    msg->travel_min, msg->travel_max, msg->travel, 
-                    msg->brake_percentage, msg->external_control);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1323,11 +1170,6 @@ private:
         this->dataNodes.current.setContent(msg->current);
         this->dataNodes.temperature.setContent(msg->temperature);
         this->dataNodes.parking.setContent(msg->parking);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: mode:%d | rpm:%d torq:%f | %f(%) | %fV %fA %fC | park:%d", 
-                    msg->motor_mode, msg->rpm, msg->torque, msg->percentage, 
-                    msg->voltage, msg->current, msg->temperature, msg->parking);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1393,9 +1235,6 @@ private:
         this->dataNodes.dir.setContent(msg->dir);
         this->dataNodes.pwm.setContent(msg->pwm);
         this->dataNodes.parking.setContent(msg->parking);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: %d | %f | %d", msg->dir, msg->pwm, msg->parking);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1460,9 +1299,6 @@ private:
         this->dataNodes.max.setContent(msg->max);
         this->dataNodes.center.setContent(msg->center);
         this->dataNodes.value.setContent(msg->value);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: %d | %f %f %f| %f", msg->unit_type, msg->min, msg->max, msg->center, msg->value);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1529,10 +1365,6 @@ private:
         this->dataNodes.volt_out.setContent(msg->volt_out);
         this->dataNodes.amp_out.setContent(msg->amp_out);
         this->dataNodes.temperature.setContent(msg->temperature);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: %02.2f %02.2f | %02.2f %02.2f | %f", 
-            msg->volt_in, msg->amp_in, msg->volt_out, msg->amp_out, msg->temperature);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1603,11 +1435,6 @@ private:
         this->dataNodes.pedal_clutch.setContent(msg->pedal_clutch);
         this->dataNodes.button.setContent(msg->button);
         this->dataNodes.func.setContent(msg->func);
-#ifdef NODE_SUBSCRIBE_PRINT
-        RCLCPP_INFO(this->get_logger(), "I heard: %03d | %05d %05d %05d %05d | %03d %03d", 
-            msg->gear, msg->steering, msg->pedal_throttle, msg->pedal_brake, msg->pedal_clutch, 
-            msg->button, msg->func);
-#endif
     }
 
     void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
@@ -1742,20 +1569,6 @@ public:
         _lockMat.unlock();
         return ret;
     }
-    /*
-    std::map<std::string, placeholder*> getLatestMsgNodePack() override
-    {
-        auto ret = TopicRecordNode::getLatestMsgNodePack();
-        if (ret.size() > 0 && this->recvMatInitF_)
-        {
-            cv::Mat saveMat;
-            if (this->getRecvMat_clone(saveMat))
-                if (holder<std::string>* val = dynamic_cast<holder<std::string>* >(ret["filename"]))
-                    // this->saveQueue_.emplace_back(SaveImg, this->outputDIR_ + val->get(), saveMat);
-                    this->saveImgQue_->push(this->outputDIR_ + val->get(), saveMat);
-        }
-        return ret;
-    }*/
 };
 
 class RGBMatSubNode : public BaseMatSubNode

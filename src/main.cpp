@@ -57,7 +57,6 @@ private:
     std::atomic<double> outFileTimestamp_;// File name in timestamp
 
     // Save image queue, pass into subscribe node which contains Image message type
-    // SaveImgQueue* globalImgQue_;// OLD
     SaveQueue<cv::Mat>* globalImgQue_;// OLD
     SaveQueue<WriteGroundDetectStruct>* globalGndQue_;
     
