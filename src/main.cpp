@@ -380,6 +380,8 @@ public:
         this->_getParams();
         this->paramsCallbackHandler = this->add_on_set_parameters_callback(std::bind(&ScanTopicNode::_paramsCallback, this, std::placeholders::_1));
         
+        this->outputFilename += "_" + std::to_string(this->getTimestamp().seconds());
+        
         char buf[128];
         if (this->outputFilename.back() != '/')
             this->outputFilename += '/';
