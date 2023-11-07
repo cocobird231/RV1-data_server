@@ -136,6 +136,13 @@ private:
         return res;
     }
 
+    void _timeSyncCallback()
+    {
+        std::lock_guard<std::mutex> locker(this->topicContainerPackLock_);
+        for (auto& [topicName, container] : this->topicContainerPack_)
+            container.node->syncTime(this->getCorrectDuration(), this->getTimestampType());
+    }
+
     void _monitorTimerCallback()
     {
         // Search topics
@@ -203,7 +210,7 @@ private:
                     else
                         continue;
 
-                    i.second.node->syncTime(this->getCorrectDuration(), this->getTimestampType());// TODO: Add TimeSyncNode syncCallback()
+                    i.second.node->syncTime(this->getCorrectDuration(), this->getTimestampType());
                     this->execMap_[i.first] = new rclcpp::executors::SingleThreadedExecutor();
                     this->execMap_[i.first]->add_node(i.second.node);
                     this->subThMap_[i.first] = std::thread(SpinTopicRecordNodeExecutor, this->execMap_[i.first], i.second.node, i.first);
@@ -387,6 +394,9 @@ public:
             this->outputFilename += '/';
         sprintf(buf, "rm -rf %s && mkdir -p %sjson", this->outputFilename.c_str(), this->outputFilename.c_str());
         const int dir_err = system(buf);
+
+        // Time sync callback
+        this->addTimeSyncCallbackFunc(std::bind(&ScanTopicNode::_timeSyncCallback, this));
 
         // Node and topic relation table
         this->nodeDetectF_ = this->nodeTopicMsgTable_.loadTable("NodeTopicTable.json");
