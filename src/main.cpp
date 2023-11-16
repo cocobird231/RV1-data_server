@@ -139,8 +139,14 @@ private:
     void _timeSyncCallback()
     {
         std::lock_guard<std::mutex> locker(this->topicContainerPackLock_);
-        for (auto& [topicName, container] : this->topicContainerPack_)
-            container.node->syncTime(this->getCorrectDuration(), this->getTimestampType());
+        for (auto& i : this->topicContainerPack_)
+        {
+            if (!i.second.occupyF || i.second.node == nullptr)
+                continue;
+            if (!i.second.node->isInit())
+                continue;
+            i.second.node->syncTime(this->getCorrectDuration(), this->getTimestampType());
+        }
     }
 
     void _monitorTimerCallback()
