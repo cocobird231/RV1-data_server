@@ -673,6 +673,7 @@ private:
 public:
     struct DataMsgNodes
     {
+        MsgNode unit_type;
         MsgNode gps_status;
         MsgNode latitude;
         MsgNode longitude;
@@ -683,6 +684,7 @@ private:
     void _topicCallback(const vehicle_interfaces::msg::GPS::SharedPtr msg)
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
+        this->dataNodes.unit_type.setContent(msg->unit_type);
         this->dataNodes.gps_status.setContent(msg->gps_status);
         this->dataNodes.latitude.setContent(msg->latitude);
         this->dataNodes.longitude.setContent(msg->longitude);
@@ -711,6 +713,7 @@ public:
         TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName)
     {
+        addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
         addLatestMsgNodePackTag("gps_status", &this->dataNodes.gps_status);
         addLatestMsgNodePackTag("latitude", &this->dataNodes.latitude);
         addLatestMsgNodePackTag("longitude", &this->dataNodes.longitude);
@@ -919,6 +922,8 @@ private:
 public:
     struct DataMsgNodes
     {
+        MsgNode depth_valid_min;
+        MsgNode depth_valid_max;
         MsgNode width;
         MsgNode height;
         MsgNode filename;
@@ -928,6 +933,8 @@ private:
     void _topicCallback(const vehicle_interfaces::msg::Image::SharedPtr msg)// JPEG Only
     {
         this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
+        this->dataNodes.depth_valid_min.setContent(msg->depth_valid_min);
+        this->dataNodes.depth_valid_max.setContent(msg->depth_valid_max);
         this->dataNodes.width.setContent(msg->width);
         this->dataNodes.height.setContent(msg->height);
         double timestamp = msg->header.stamp.sec + (double)msg->header.stamp.nanosec / 1000000000.0;
@@ -990,6 +997,8 @@ public:
         TopicRecordSavingNode(nodeName, outputDir, qosServiceName, qosDirPath), 
         rclcpp::Node(nodeName)
     {
+        addLatestMsgNodePackTag("depth_valid_min", &this->dataNodes.depth_valid_min);
+        addLatestMsgNodePackTag("depth_valid_max", &this->dataNodes.depth_valid_max);
         addLatestMsgNodePackTag("width", &this->dataNodes.width);
         addLatestMsgNodePackTag("height", &this->dataNodes.height);
         addLatestMsgNodePackTag("filename", &this->dataNodes.filename);
