@@ -1,6 +1,6 @@
 {
     "devInfoService" : "devinfo_0", 
-    "devInterface" : "eth0", 
+    "devInterface" : "enp2s0", 
     "devMultiNode" : true, 
 
     "qosService" : "qos_0", 

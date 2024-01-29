@@ -785,11 +785,11 @@ private:
         for (auto& i : msg->roi)
         {
             WriteBBox2DStruct bbox;
-            bbox.o[0] = i.o[0];
-            bbox.o[1] = i.o[1];
+            bbox.o[0] = i.o.x;
+            bbox.o[1] = i.o.y;
             bbox.origin_type = i.origin_type;
-            bbox.size[0] = i.size[0];
-            bbox.size[1] = i.size[1];
+            bbox.size[0] = i.size.width;
+            bbox.size[1] = i.size.height;
             bbox.label = i.label;
             bbox.id = i.id;
 
