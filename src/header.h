@@ -10,6 +10,7 @@
 
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 
 #include <sstream>
@@ -19,7 +20,7 @@
 // JSON File
 #include <sqlite3.h>
 #include <nlohmann/json.hpp>
-#include <iomanip>// nlohmann json dependency
+#include <iomanip>
 #include <fstream>
 #include <cstdlib>
 
@@ -47,63 +48,7 @@
 // Image Process
 #include <opencv2/opencv.hpp>
 
-//#define NODE_SUBSCRIBE_PRINT
-
 using namespace std::chrono_literals;
-using namespace std::placeholders;
-
-enum TopicNodeException { CLOSE_SIGNAL };
-
-void SaveImg(std::string, cv::Mat);
-
-
-/**
- * This code is referenced from https://rigtorp.se/spinlock/
- */
-struct spinlock
-{
-    std::atomic<bool> lock_ = {0};
-
-    void lock() noexcept
-    {
-        for (;;)
-        {
-            // Optimistically assume the lock is free on the first try
-            if (!lock_.exchange(true, std::memory_order_acquire))
-            {
-                return;
-            }
-            // Wait for lock to be released without generating cache misses
-            while (lock_.load(std::memory_order_relaxed))
-            {
-                // Issue X86 PAUSE or ARM YIELD instruction to reduce contention between
-                // hyper-threads
-#ifdef __aarch64__
-                std::this_thread::yield();
-#elif __WIN32
-                std::this_thread::yield();
-#else
-                __builtin_ia32_pause();
-#endif
-            }
-        }
-    }
-
-    bool try_lock() noexcept
-    {
-        // First do a relaxed load to check if lock is free in order to prevent
-        // unnecessary cache misses if someone does while(!try_lock())
-        return !lock_.load(std::memory_order_relaxed) && 
-                !lock_.exchange(true, std::memory_order_acquire);
-    }
-
-    void unlock() noexcept
-    {
-        lock_.store(false, std::memory_order_release);
-    }
-};
-
-
 
 class placeholder
 {
@@ -191,64 +136,58 @@ template<typename T>
 class SaveQueue
 {
 private:
-    std::deque<PairQue<T>> totalPairQue_;
+    std::deque<PairQue<T> > totalPairQue_;// Each thread's PairQue
 
     std::vector<std::thread> thVec_;
-    std::vector<std::timed_mutex> queLockVec_;
+    std::vector<std::mutex> queLockVec_;
+    std::vector<std::condition_variable> queCVVec_;
     size_t thNum_;
 
     std::atomic<size_t> thSelect_;
     std::mutex thSelectLock_;
 
-    int interval_ms_;
-
     std::atomic<bool> exitF_;
 
 private:
-    void _saveTh(size_t queID)// specified
+    void _saveTh(size_t queID)
     {
-        std::unique_lock<std::timed_mutex> locker(this->queLockVec_[queID], std::defer_lock);
-        PairQue<T>* PairQuePtr = &this->totalPairQue_[queID];
-        bool emptyF = true;
-        while (!(this->exitF_ && emptyF))
+        std::unique_lock<std::mutex> locker(this->queLockVec_[queID], std::defer_lock);
+        while (!this->exitF_)
         {
-            if (locker.try_lock_for(5ms))
-            {
-                if (PairQuePtr->empty())
-                {
-                    emptyF = true;
-                    locker.unlock();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
-                    continue;
-                }
-                PairQuePtr->pop_front();
-                emptyF = false;
-                locker.unlock();
-                std::cerr << "!!!SaveQueue Unspecified!!!" << "\n";
-            }
-            else
-                std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
+            locker.lock();
+            this->queCVVec_[queID].wait(locker);
+            PairQue<T> tmp(std::make_move_iterator(this->totalPairQue_[queID].begin()), 
+                            std::make_move_iterator(this->totalPairQue_[queID].end()));
+            this->totalPairQue_[queID].clear();
+            locker.unlock();
+            if (tmp.size() <= 0)
+                continue;
+            this->_saveCbFunc(tmp);
         }
+    }
+
+    /**
+     * @brief Save callback function, override this function to save data.
+     * @param[in] queue A bunch of data to be saved will be formed as a series of pair <file_name, data> in the queue.
+     */
+    void _saveCbFunc(PairQue<T>& queue)
+    {
+        printf("[SaveQueue::_saveCbFunc] Function not override.\n");
     }
 
     size_t _getSaveQueID()
     {
-        std::unique_lock<std::mutex> locker(this->thSelectLock_, std::defer_lock);
-        size_t ret;
-        locker.lock();
-        ret = (++this->thSelect_) % this->thNum_;
-        this->thSelect_ = ret;
-        locker.unlock();
-        return ret;
+        std::lock_guard<std::mutex> locker(this->thSelectLock_);
+        this->thSelect_ = (++this->thSelect_) % this->thNum_;
+        return this->thSelect_;
     }
 
 public:
-    SaveQueue(size_t thNum = 1, int scanInterval_ms = 100) : exitF_(false), thSelect_(0)
+    SaveQueue(size_t thNum = 1) : exitF_(false), thSelect_(0)
     {
         this->thNum_ = thNum;
-        this->interval_ms_ = scanInterval_ms;
-        
-        this->queLockVec_ = std::vector<std::timed_mutex>(thNum);
+        this->queLockVec_ = std::vector<std::mutex>(thNum);
+        this->queCVVec_ = std::vector<std::condition_variable>(thNum);
         this->totalPairQue_ = std::deque<PairQue<T>>(thNum);
 
         for (size_t i = 0; i < thNum; i++)
@@ -264,11 +203,12 @@ public:
 
     void push(const std::string& fileName, const T& element)
     {
+        if (this->exitF_)
+            return;
         auto id = _getSaveQueID();
-        std::unique_lock<std::timed_mutex> locker(this->queLockVec_[id], std::defer_lock);
-        locker.lock();
+        std::lock_guard<std::mutex> locker(this->queLockVec_[id]);
         this->totalPairQue_[id].emplace_back(fileName, element);
-        locker.unlock();
+        this->queCVVec_[id].notify_one();
     }
 
     std::vector<size_t> getSize()
@@ -276,105 +216,70 @@ public:
         std::vector<size_t> ret(thNum_, 0);
         for (size_t i = 0; i < this->thNum_; i++)
         {
-            std::unique_lock<std::timed_mutex> locker(this->queLockVec_[i], std::defer_lock);
-            locker.lock();
+            std::lock_guard<std::mutex> locker(this->queLockVec_[i]);
             ret[i] = this->totalPairQue_[i].size();
-            locker.unlock();
         }
         return ret;
     }
 
     void shrink_to_fit()
     {
+        if (this->exitF_)
+            return;
         for (size_t i = 0; i < this->thNum_; i++)
         {
-            std::unique_lock<std::timed_mutex> locker(this->queLockVec_[i], std::defer_lock);
-            locker.lock();
+            std::lock_guard<std::mutex> locker(this->queLockVec_[i]);
             //this->totalPairQue_[i].shrink_to_fit();
             PairQue<T>(this->totalPairQue_[i]).swap(this->totalPairQue_[i]);
-            locker.unlock();
         }
     }
 
-    void close() { this->exitF_ = true; }
+    void close()
+    {
+        if (this->exitF_)
+            return;
+        this->exitF_ = true;
+        std::this_thread::sleep_for(100ms);
+
+        for (int i = 0; i < this->thNum_; i++)
+        {
+            std::lock_guard<std::mutex> locker(this->queLockVec_[i]);
+            this->queCVVec_[i].notify_one();
+            this->thVec_[i].join();
+        }
+    }
 };
 
+
+
 template<>
-void SaveQueue<cv::Mat>::_saveTh(size_t queID)// cv::Mat specified TODO: to be validation
+void SaveQueue<cv::Mat>::_saveCbFunc(PairQue<cv::Mat>& queue)
 {
-    std::unique_lock<std::timed_mutex> locker(this->queLockVec_[queID], std::defer_lock);
-    PairQue<cv::Mat>* PairQuePtr = &this->totalPairQue_[queID];
-    bool emptyF = true;
-    std::string fileName;
-    cv::Mat element;
-    while (!(this->exitF_ && emptyF))
-    {
-        if (locker.try_lock_for(5ms))
-        {
-            if (PairQuePtr->empty())
-            {
-                emptyF = true;
-                locker.unlock();
-                std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
-                continue;
-            }
-            const std::pair<std::string, cv::Mat>& item = PairQuePtr->front();
-            fileName = item.first;
-            element = item.second.clone();
-            PairQuePtr->pop_front();
-            emptyF = false;
-            locker.unlock();
-            cv::imwrite(fileName, element);
-        }
-        else
-            std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
-    }
+    for (const auto& [fileName, data] : queue)
+        cv::imwrite(fileName, data);
 }
 
 template<>
-void SaveQueue<WriteGroundDetectStruct>::_saveTh(size_t queID)// WriteGroundDetectStruct specified
+void SaveQueue<WriteGroundDetectStruct>::_saveCbFunc(PairQue<WriteGroundDetectStruct>& queue)
 {
-    std::unique_lock<std::timed_mutex> locker(this->queLockVec_[queID], std::defer_lock);
-    PairQue<WriteGroundDetectStruct>* PairQuePtr = &this->totalPairQue_[queID];
-    bool emptyF = true;
-    std::string fileName;
-    WriteGroundDetectStruct element;
-    while (!(this->exitF_ && emptyF))
+    for (const auto& [fileName, data] : queue)
     {
-        if (locker.try_lock_for(5ms))
+        // Create File
+        FILE *fp = fopen(fileName.c_str(), "wb");
+        if (fp == NULL)
         {
-            if (PairQuePtr->empty())
-            {
-                emptyF = true;
-                locker.unlock();
-                std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
-                continue;
-            }
-            const std::pair<std::string, WriteGroundDetectStruct>& item = PairQuePtr->front();
-            fileName = item.first;
-            element = item.second;
-            PairQuePtr->pop_front();
-            emptyF = false;
-            locker.unlock();
-            
-            // Create File
-            FILE *fp = fopen(fileName.c_str(), "wb");
-            if (fp == NULL)
-            {
-                printf("failed to open the file: %s\n", fileName.c_str());
-                return;
-            }
-            
-            // Write WriteGroundDetectStruct to file implementation
-            fwrite(&element.header, sizeof(WriteGroundDetectHeaderStruct), 1, fp);
-            fwrite(element.bboxVec.data(), sizeof(WriteBBox2DStruct), element.bboxVec.size(), fp);
-            fwrite(element.groundLine.data(), sizeof(int16_t), element.groundLine.size(), fp);
-            fclose(fp);
+            printf("failed to open the file: %s\n", fileName.c_str());
+            return;
         }
-        else
-            std::this_thread::sleep_for(std::chrono::milliseconds(this->interval_ms_));
+
+        // Write WriteGroundDetectStruct to file implementation
+        fwrite(&data.header, sizeof(WriteGroundDetectHeaderStruct), 1, fp);
+        fwrite(data.bboxVec.data(), sizeof(WriteBBox2DStruct), data.bboxVec.size(), fp);
+        fwrite(data.groundLine.data(), sizeof(int16_t), data.groundLine.size(), fp);
+        fclose(fp);
     }
 }
+
 
 
 /**
@@ -410,7 +315,7 @@ private:
 
     } headerNodes_;
     std::map<std::string, MsgNode*> latestMsgNodePack_;
-    std::mutex latestMsgNodePackLocker_;// Change untest (spinlock to mutex)
+    std::mutex latestMsgNodePackLocker_;
 
     std::atomic<bool> initF_;
     std::atomic<uint64_t> recvFrameID_;
@@ -1795,7 +1700,7 @@ public:
         depth_qos.best_effort();
         depth_qos.durability_volatile();
         // Create rgba subscriber
-        this->RGBASub_ = this->create_subscription<sensor_msgs::msg::Image>(topicName, depth_qos, std::bind(&RGBMatSubNode::_rgbaCallback, this, _1));
+        this->RGBASub_ = this->create_subscription<sensor_msgs::msg::Image>(topicName, depth_qos, std::bind(&RGBMatSubNode::_rgbaCallback, this, std::placeholders::_1));
     }
 };
 
@@ -1848,7 +1753,7 @@ public:
         depth_qos.best_effort();
         depth_qos.durability_volatile();
         // Create depth map subscriber
-        this->mDepthSub = create_subscription<sensor_msgs::msg::Image>(topicName, depth_qos, std::bind(&DepthMatSubNode::_depthCallback, this, _1));
+        this->mDepthSub = create_subscription<sensor_msgs::msg::Image>(topicName, depth_qos, std::bind(&DepthMatSubNode::_depthCallback, this, std::placeholders::_1));
     }
 };
 

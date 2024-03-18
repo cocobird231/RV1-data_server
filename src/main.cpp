@@ -411,9 +411,8 @@ public:
         // Node and topic relation table
         this->nodeDetectF_ = this->nodeTopicMsgTable_.loadTable("NodeTopicTable.json");
 
-        this->globalImgQue_ = new SaveQueue<cv::Mat>(this->numOfImgSaveTh, 100);
-        this->globalGndQue_ = new SaveQueue<WriteGroundDetectStruct>(this->numOfGndSaveTh, 100);
-
+        this->globalImgQue_ = new SaveQueue<cv::Mat>(this->numOfImgSaveTh);
+        this->globalGndQue_ = new SaveQueue<WriteGroundDetectStruct>(this->numOfGndSaveTh);
         this->monitorTimer_ = new vehicle_interfaces::Timer(this->topicScanTime_ms, std::bind(&ScanTopicNode::_monitorTimerCallback, this));
         this->monitorTimer_->start();
         this->sampleTimer_ = new vehicle_interfaces::Timer(this->samplingStep_ms, std::bind(&ScanTopicNode::_sampleTimerCallback, this));
@@ -423,6 +422,8 @@ public:
         else
             this->recordTimer_ = nullptr;
         this->packPtr_ = &this->pack_;
+        std::this_thread::sleep_for(1s);
+        RCLCPP_INFO(this->get_logger(), "[ScanTopicNode] Constructed");
     }
 
     void startSampling()
@@ -490,7 +491,7 @@ public:
         printf("Dump %f.json took %f ms\n", fileTimestamp, (std::chrono::steady_clock::now() - st).count() / 1000000.0);
         this->outPackBkF_ = !this->outPackBkF_;
     }
-    
+
     void close()
     {
         if (this->exitF_)// Already closed
