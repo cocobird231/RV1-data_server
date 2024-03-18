@@ -24,6 +24,7 @@
 #include <cstdlib>
 
 #include "rclcpp/rclcpp.hpp"
+#include "vehicle_interfaces/msg/chassis.hpp"
 #include "vehicle_interfaces/msg/distance.hpp"
 #include "vehicle_interfaces/msg/environment.hpp"
 #include "vehicle_interfaces/msg/gps.hpp"
@@ -35,6 +36,8 @@
 #include "vehicle_interfaces/msg/millit_power_motor.hpp"
 #include "vehicle_interfaces/msg/motor_axle.hpp"
 #include "vehicle_interfaces/msg/motor_steering.hpp"
+#include "vehicle_interfaces/msg/qos_update.hpp"
+#include "vehicle_interfaces/msg/steering_wheel.hpp"
 #include "vehicle_interfaces/msg/ups.hpp"
 #include "vehicle_interfaces/msg/wheel_state.hpp"
 
@@ -1282,7 +1285,7 @@ public:
 
 
 /**
- * Message Type: MotorAxle
+ * Message Type: MotorSteering
 */
 class MotorSteeringSubNode : public TopicRecordNode
 {
@@ -1484,6 +1487,167 @@ public:
     }
 };
 
+
+/**
+ * Message Type: Chassis
+ */
+class ChassisSubNode : public TopicRecordNode
+{
+private:
+    rclcpp::Subscription<vehicle_interfaces::msg::Chassis>::SharedPtr subscription_;
+
+public:
+    struct DataMsgNodes
+    {
+        MsgNode unit_type;
+        MsgNode drive_motor;
+        MsgNode steering_motor;
+        MsgNode brake_motor;
+        MsgNode parking_signal;
+        MsgNode controller_frame_id;
+        MsgNode controller_interrupt;
+        MsgNode controller_name;
+    } dataNodes;
+
+private:
+    void _topicCallback(const vehicle_interfaces::msg::Chassis::SharedPtr msg)
+    {
+        this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
+        this->dataNodes.unit_type.setContent(msg->unit_type);
+        this->dataNodes.drive_motor.setContent(msg->drive_motor);
+        this->dataNodes.steering_motor.setContent(msg->steering_motor);
+        this->dataNodes.brake_motor.setContent(msg->brake_motor);
+        this->dataNodes.parking_signal.setContent(msg->parking_signal);
+        this->dataNodes.controller_frame_id.setContent(msg->controller_frame_id);
+        this->dataNodes.controller_interrupt.setContent(msg->controller_interrupt);
+        this->dataNodes.controller_name.setContent(msg->controller_name);
+    }
+
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Chassis>(topicName, 
+                    *v, std::bind(&ChassisSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
+public:
+    ChassisSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
+    {
+        addLatestMsgNodePackTag("unit_type", &this->dataNodes.unit_type);
+        addLatestMsgNodePackTag("drive_motor", &this->dataNodes.drive_motor);
+        addLatestMsgNodePackTag("steering_motor", &this->dataNodes.steering_motor);
+        addLatestMsgNodePackTag("brake_motor", &this->dataNodes.brake_motor);
+        addLatestMsgNodePackTag("parking_signal", &this->dataNodes.parking_signal);
+        addLatestMsgNodePackTag("controller_frame_id", &this->dataNodes.controller_frame_id);
+        addLatestMsgNodePackTag("controller_interrupt", &this->dataNodes.controller_interrupt);
+        addLatestMsgNodePackTag("controller_name", &this->dataNodes.controller_name);
+
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&ChassisSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
+        this->subscription_ = this->create_subscription<vehicle_interfaces::msg::Chassis>(topicName, 
+            *qpair.second, std::bind(&ChassisSubNode::_topicCallback, this, std::placeholders::_1));
+    }
+};
+
+
+/**
+ * Message Type: SteeringWheel
+ */
+class SteeringWheelSubNode : public TopicRecordNode
+{
+private:
+    rclcpp::Subscription<vehicle_interfaces::msg::SteeringWheel>::SharedPtr subscription_;
+
+public:
+    struct DataMsgNodes
+    {
+        MsgNode gear;
+        MsgNode steering;
+        MsgNode pedal_throttle;
+        MsgNode pedal_brake;
+        MsgNode pedal_clutch;
+        MsgNode func_0;
+        MsgNode func_1;
+        MsgNode func_2;
+        MsgNode func_3;
+        MsgNode controller_frame_id;
+        MsgNode controller_interrupt;
+        MsgNode controller_name;
+    } dataNodes;
+
+private:
+    void _topicCallback(const vehicle_interfaces::msg::SteeringWheel::SharedPtr msg)
+    {
+        this->setHeaderNodes(std::make_shared<vehicle_interfaces::msg::Header>(msg->header));
+        this->dataNodes.gear.setContent(msg->gear);
+        this->dataNodes.steering.setContent(msg->steering);
+        this->dataNodes.pedal_throttle.setContent(msg->pedal_throttle);
+        this->dataNodes.pedal_brake.setContent(msg->pedal_brake);
+        this->dataNodes.pedal_clutch.setContent(msg->pedal_clutch);
+        this->dataNodes.func_0.setContent(msg->func_0);
+        this->dataNodes.func_1.setContent(msg->func_1);
+        this->dataNodes.func_2.setContent(msg->func_2);
+        this->dataNodes.func_3.setContent(msg->func_3);
+        this->dataNodes.controller_frame_id.setContent(msg->controller_frame_id);
+        this->dataNodes.controller_interrupt.setContent(msg->controller_interrupt);
+        this->dataNodes.controller_name.setContent(msg->controller_name);
+    }
+
+    void _qosCallback(std::map<std::string, rclcpp::QoS*> qmap) override
+    { 
+        auto topicName = this->getTopicName();
+        for (const auto& [k, v] : qmap)
+        {
+            if (k == topicName || k == (std::string)this->get_namespace() + "/" + topicName)
+            {
+                this->subscription_.reset();
+                this->subscription_ = this->create_subscription<vehicle_interfaces::msg::SteeringWheel>(topicName, 
+                    *v, std::bind(&SteeringWheelSubNode::_topicCallback, this, std::placeholders::_1));
+            }
+        }
+    }
+
+public:
+    SteeringWheelSubNode(const std::string& nodeName, 
+                    const std::string& topicName, 
+                    const std::string& qosServiceName, 
+                    const std::string& qosDirPath) : 
+        TopicRecordNode(nodeName, qosServiceName, qosDirPath), 
+        rclcpp::Node(nodeName)
+    {
+        addLatestMsgNodePackTag("gear", &this->dataNodes.gear);
+        addLatestMsgNodePackTag("steering", &this->dataNodes.steering);
+        addLatestMsgNodePackTag("pedal_throttle", &this->dataNodes.pedal_throttle);
+        addLatestMsgNodePackTag("pedal_brake", &this->dataNodes.pedal_brake);
+        addLatestMsgNodePackTag("pedal_clutch", &this->dataNodes.pedal_clutch);
+        addLatestMsgNodePackTag("func_0", &this->dataNodes.func_0);
+        addLatestMsgNodePackTag("func_1", &this->dataNodes.func_1);
+        addLatestMsgNodePackTag("func_2", &this->dataNodes.func_2);
+        addLatestMsgNodePackTag("func_3", &this->dataNodes.func_3);
+        addLatestMsgNodePackTag("controller_frame_id", &this->dataNodes.controller_frame_id);
+        addLatestMsgNodePackTag("controller_interrupt", &this->dataNodes.controller_interrupt);
+        addLatestMsgNodePackTag("controller_name", &this->dataNodes.controller_name);
+
+        this->setTopicName(topicName);
+        this->addQoSCallbackFunc(std::bind(&SteeringWheelSubNode::_qosCallback, this, std::placeholders::_1));
+        vehicle_interfaces::QoSPair qpair = this->addQoSTracking(topicName);
+        this->subscription_ = this->create_subscription<vehicle_interfaces::msg::SteeringWheel>(topicName, 
+            *qpair.second, std::bind(&SteeringWheelSubNode::_topicCallback, this, std::placeholders::_1));
+    }
+};
 
 
 /**

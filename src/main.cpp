@@ -213,6 +213,10 @@ private:
                         i.second.node = std::make_shared<UPSSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else if (msgTypeSplit[2] == "WheelState")
                         i.second.node = std::make_shared<WheelStateSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
+                    else if (msgTypeSplit[2] == "Chassis")
+                        i.second.node = std::make_shared<ChassisSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
+                    else if (msgTypeSplit[2] == "SteeringWheel")
+                        i.second.node = std::make_shared<SteeringWheelSubNode>(subNodeName, i.first, gParams_->qosService, gParams_->qosDirPath);
                     else
                         continue;
 
