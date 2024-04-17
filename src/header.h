@@ -44,6 +44,7 @@
 
 #include "vehicle_interfaces/srv/id_server.hpp"
 
+#include "vehicle_interfaces/timer.h"
 #include "vehicle_interfaces/utils.h"
 #include "vehicle_interfaces/vehicle_interfaces.h"
 
@@ -169,9 +170,9 @@ private:
         while (!this->exitF_)
         {
             locker.lock();
-            printf("[SaveQueue::_saveTh] Thread %ld waiting...\n", queID);
+            // printf("[SaveQueue::_saveTh] Thread %ld waiting...\n", queID);
             this->queCVVec_[queID].wait(locker);
-            printf("[SaveQueue::_saveTh] Thread %ld working...\n", queID);
+            // printf("[SaveQueue::_saveTh] Thread %ld working...\n", queID);
             PairQue<T> tmp(std::make_move_iterator(this->totalPairQue_[queID].begin()), 
                             std::make_move_iterator(this->totalPairQue_[queID].end()));
             this->totalPairQue_[queID].clear();
@@ -246,11 +247,11 @@ public:
         if (this->exitF_ || !this->availableF_)
             return;
         auto id = _getSaveQueID();
-        printf("[SaveQueue::push] Got id: %ld\n", id);
+        // printf("[SaveQueue::push] Got id: %ld\n", id);
         std::unique_lock<std::mutex> locker(this->queMutexVec_[id], std::defer_lock);
         locker.lock();
         this->totalPairQue_[id].emplace_back(fileName, element);
-        printf("[SaveQueue::push] Pushed to %ld\n", id);
+        // printf("[SaveQueue::push] Pushed to %ld\n", id);
         this->queCVVec_[id].notify_all();
         locker.unlock();
     }
@@ -320,10 +321,10 @@ public:
 template<>
 void SaveQueue<cv::Mat>::_saveCbFunc(PairQue<cv::Mat>& queue)
 {
-    printf("[SaveQueue::_saveCbFunc<cv::Mat>] Function called.\n");
+    // printf("[SaveQueue::_saveCbFunc<cv::Mat>] Function called.\n");
     for (const auto& [fileName, data] : queue)
     {
-        printf("[SaveQueue::_saveCbFunc<cv::Mat>] Saving %s %dx%d (%d)\n", fileName.c_str(), data.cols, data.rows, data.type());
+        // printf("[SaveQueue::_saveCbFunc<cv::Mat>] Saving %s %dx%d (%d)\n", fileName.c_str(), data.cols, data.rows, data.type());
         cv::imwrite(fileName, data);
     }
 }
@@ -336,7 +337,7 @@ void SaveQueue<cv::Mat>::_saveCbFunc(PairQue<cv::Mat>& queue)
 template<>
 void SaveQueue<WriteGroundDetectStruct>::_saveCbFunc(PairQue<WriteGroundDetectStruct>& queue)
 {
-    printf("[SaveQueue::_saveCbFunc<WriteGroundDetectStruct>] Function called.\n");
+    // printf("[SaveQueue::_saveCbFunc<WriteGroundDetectStruct>] Function called.\n");
     for (const auto& [fileName, data] : queue)
     {
         // Create File
@@ -1555,14 +1556,6 @@ public:
 /*
 * Functions
 */
-void SpinNodeExecutor(rclcpp::executors::SingleThreadedExecutor* exec, std::string threadName)
-{
-    std::this_thread::sleep_for(1s);
-    std::cerr << threadName << " start..." << std::endl;
-    exec->spin();
-    std::cerr << threadName << " exit." << std::endl;
-}
-
 void SpinTopicRecordNodeExecutor(rclcpp::executors::SingleThreadedExecutor* exec, std::shared_ptr<BaseTopicRecordNode> node, std::string threadName)
 {
     std::this_thread::sleep_for(1s);
@@ -1570,36 +1563,6 @@ void SpinTopicRecordNodeExecutor(rclcpp::executors::SingleThreadedExecutor* exec
     std::cerr << threadName << " start..." << std::endl;
     exec->spin();
     std::cerr << threadName << " exit." << std::endl;
-}
-
-
-std::vector<std::string> split(std::string str, std::string delimiter)
-{
-    std::vector<std::string> splitStrings;
-    int encodingStep = 0;
-    for (size_t i = 0; i < str.length(); i++)
-    {
-        bool isDelimiter = false;
-        for (auto& j : delimiter)
-            if (str[i] == j)
-            {
-                isDelimiter = true;
-                break;
-            }
-        if (!isDelimiter)// Is the spliting character
-        {
-            encodingStep++;
-            if (i == str.length() - 1)
-                splitStrings.push_back(str.substr(str.length() - encodingStep, encodingStep));
-        }
-        else// Is delimiter
-        {
-            if (encodingStep > 0)// Have characters need to split
-                splitStrings.push_back(str.substr(i - encodingStep, encodingStep));
-            encodingStep = 0;
-        }
-    }
-    return splitStrings;
 }
 
 template<typename T>
